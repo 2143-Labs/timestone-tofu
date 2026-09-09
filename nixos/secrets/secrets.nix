@@ -17,8 +17,7 @@
 #             Per-node ssh host pubkeys may be appended later for fidelity.
 let
   office = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHvBxDHUfnnQSNGr3K35hacUDFzveraQ3F0JKcwUDHr5 john@office";
-  # FILL at Stage 3.1 with `age-keygen -y age-identity` output (starts age1…):
-  nodeAgeIdentity = "age1PLACEHOLDER...";
+  nodeAgeIdentity = "age1p9su5egx07kvpas7we844dzzjg0eptmfqszqru22rwla90awraqq78e8uf"; # timestone-age-identity (office-held)
   allKeys = [office nodeAgeIdentity];
 in {
   "timestone/k3s-token.age".publicKeys = allKeys;
