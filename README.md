@@ -47,3 +47,39 @@ bin/cycle-node.sh <host> <ip>             # rolling OS update (drain→rebuild�
 ```
 
 Full checklist: [`bootstrap/README.md`](bootstrap/README.md).
+
+## CI / multi-user (GitHub Actions)
+
+Deploys are NOT office-machine-only. `.github/workflows/`:
+
+| Workflow | Trigger | Needs secrets | Effect |
+|---|---|---|---|
+| `tofu-validate.yml` | PR + push to main (tofu paths) | none | `fmt -check` + `tofu validate` on hetzner/ + cloudflare/ |
+| `tofu-apply.yml` | push to main (tofu paths) + manual | yes | `tofu apply` cloudflare → hetzner |
+| `nixos-check.yml` | PR + push (nixos paths) | none | flake eval of both host configs (skipped until Stage 3.1 age files are committed) |
+
+Apply runs on the `timestone` GitHub **environment**, so an approval rule can
+gate it (repo Settings → Environments). Anyone with 2143-Labs repo access who
+can run the workflow inherits deploy capability — no machine/key setup.
+
+### GitHub Actions secrets (set once after the repos exist)
+
+Repo (or org) secrets on `2143-Labs/timestone-tofu` — plaintext never enters the
+repo:
+
+| Secret | Value |
+|---|---|
+| `HCLOUD_TOKEN` | Hetzner project-scoped R/W token |
+| `CLOUDFLARE_API_TOKEN` | CF token (Zone:DNS:Edit, Zone:Zone:Edit, Tunnel:Edit) |
+| `CF_ACCOUNT_ID` | Cloudflare account id |
+| `TUNNEL_SECRET` | the 32-byte base64 tunnel secret (same as the office env file) |
+| `OFFICE_CIDR` | office public IPv4 `/32` (update if the office egress IP changes) |
+
+```sh
+gh secret set HCLOUD_TOKEN --repo 2143-Labs/timestone-tofu
+# … repeat for the other four
+```
+
+The office age env file (`~/.config/timestone/providers.env.age`) remains the
+canonical store for local runs and for one-time Stage 3 installs (see
+`secrets/README.md`); the GitHub secrets mirror it for CI.

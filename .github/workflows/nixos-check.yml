@@ -1,0 +1,47 @@
+name: nixos check
+
+# Cheap evaluation check of the host flake (catches module syntax/option
+# errors early). Skipped while the age secret files are absent (they land at
+# Stage 3.1 and ARE committed — ciphertext only); a full `nix build`/deploy is
+# intentionally NOT part of CI (nodes self-update from the public repo).
+on:
+  pull_request:
+    paths: ["nixos/**"]
+  push:
+    branches: [main]
+    paths: ["nixos/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: age files present?
+        id: ages
+        run: |
+          if [ -n "$(ls nixos/secrets/timestone/*.age 2>/dev/null | head -1)" ]; then
+            echo "present=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=no" >> "$GITHUB_OUTPUT"
+            echo "age secrets not committed yet (Stage 3.1) — eval skipped"
+          fi
+
+      - uses: cachix/install-nix-action@v30
+        if: steps.ages.outputs.present == 'yes'
+        with:
+          extra_nix_config: "experimental-features = nix-command flakes"
+
+      - name: eval both host configs
+        if: steps.ages.outputs.present == 'yes'
+        run: |
+          set -euo pipefail
+          cd nixos
+          nix flake lock --no-write-lock-file >/dev/null 2>&1 || true
+          echo "ctl hostName: $(nix eval --raw .#nixosConfigurations.ts-hz-ctl.config.networking.hostName)"
+          echo "db  hostName: $(nix eval --raw .#nixosConfigurations.ts-hz-db.config.networking.hostName)"
+          echo "db  role:     $(nix eval --raw .#nixosConfigurations.ts-hz-db.config.services.k3s.role)"

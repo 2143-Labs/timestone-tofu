@@ -1,0 +1,59 @@
+name: tofu apply
+
+# Applies infra changes when tofu paths land on main, or manually.
+# Secrets live in GitHub Actions secrets (repo or environment `timestone`) —
+# NEVER in repo files. Runs on github.com (US) runners making outbound API
+# calls only; no EU data transits GitHub.
+#
+# The `timestone` environment exists so an approval rule can gate applies
+# (repo Settings → Environments → timestone → required reviewers). Remove the
+# `environment` key to make applies fully automatic on main pushes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "hetzner/**"
+      - "cloudflare/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timestone-tofu-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: timestone
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_account_id: ${{ secrets.CF_ACCOUNT_ID }}
+      TF_VAR_tunnel_secret: ${{ secrets.TUNNEL_SECRET }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+      # Static office public IPv4 — Hetzner firewall keeps SSH/kube API open to
+      # the office ONLY. Update this secret if the office egress IP changes.
+      TF_VAR_office_cidr: ${{ secrets.OFFICE_CIDR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.12.6
+
+      - name: apply cloudflare (zone + tunnel + wildcard CNAME)
+        working-directory: cloudflare
+        run: |
+          tofu init -input=false -no-color
+          tofu apply -auto-approve -no-color
+
+      - name: apply hetzner (nodes + firewall)
+        working-directory: hetzner
+        run: |
+          tofu init -input=false -no-color
+          tofu apply -auto-approve -no-color
+
+      - name: report nodes
+        working-directory: hetzner
+        run: tofu output -json nodes

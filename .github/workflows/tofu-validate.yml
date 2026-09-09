@@ -1,0 +1,39 @@
+name: tofu validate
+
+on:
+  pull_request:
+    paths:
+      - "hetzner/**"
+      - "cloudflare/**"
+      - ".github/workflows/tofu-*.yml"
+  push:
+    branches: [main]
+    paths:
+      - "hetzner/**"
+      - "cloudflare/**"
+      - ".github/workflows/tofu-*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [hetzner, cloudflare]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.12.6
+      - name: fmt check
+        working-directory: ${{ matrix.dir }}
+        run: tofu fmt -check -recursive
+      - name: init + validate
+        working-directory: ${{ matrix.dir }}
+        run: |
+          tofu init -input=false -no-color
+          tofu validate -no-color

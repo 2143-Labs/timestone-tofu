@@ -35,3 +35,14 @@ Contents: `HCLOUD_TOKEN`, `CLOUDFLARE_API_TOKEN`, `TF_VAR_account_id`,
 Do NOT create placeholder K8s Secrets in the GitOps repo — ArgoCD selfHeal would
 overwrite runtime-injected values (59s lesson). Manifests reference secrets by
 name only.
+
+## GitHub Actions secrets (for CI / other users)
+
+The same values are mirrored as GitHub **secrets** (encrypted; never in files)
+so CI and other 2143-Labs members can apply infra: `HCLOUD_TOKEN`,
+`CLOUDFLARE_API_TOKEN`, `CF_ACCOUNT_ID`, `TUNNEL_SECRET`, `OFFICE_CIDR` on
+`2143-Labs/timestone-tofu` (see repo README). The office env file stays the
+canonical local store; the GitHub secrets are the CI mirror. One-time Stage 3
+installs (age files, node identity) remain office-only by design — extending
+them to more users means adding their age public keys to
+`../nixos/secrets/secrets.nix` and re-running `agenix -r`.

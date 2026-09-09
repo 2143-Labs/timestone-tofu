@@ -7,8 +7,9 @@ variable "hcloud_token" {
 }
 
 variable "ssh_public_key" {
-  description = "Path to the 2143 Labs ops public key (never commit the private key)"
+  description = "Path to the 2143 Labs ops public key (never commit the private key). Defaults to the committed office key so CI applies need no extra secret."
   type        = string
+  default     = "./ops-ssh-key.pub"
 }
 
 variable "ssh_key_name" {
