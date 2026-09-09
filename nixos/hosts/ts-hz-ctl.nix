@@ -1,4 +1,4 @@
-# ts-hz-ctl — k3s SERVER (control plane + ArgoCD + cloudflared/traefik/cnpg via waves)
+# ts-hz-ctl — k3s SERVER (control plane + ArgoCD + traefik/cloudflared via waves)
 {...}: {
   imports = [
     ../modules/argocd-bootstrap.nix
@@ -10,8 +10,8 @@
 
   custom.k3s = {
     role = "server";
-    ownIp = "<TS-HZ-CTL-IP>"; # FILL from `tofu output nodes` (Stage 2.2)
-    peerIp = "<TS-HZ-DB-IP>"; # FILL from `tofu output nodes` (Stage 2.2)
-    officeIp = "<OFFICE-IP>"; # office public IPv4 — SSH/kube API only source
+    ownIp = "46.224.91.55"; # Hetzner nbg1 (tofu output nodes.ctl)
+    peerIp = "178.104.247.194"; # ts-hz-db
+    officeIp = "108.56.153.222"; # office public IPv4 — SSH/kube API only source
   };
 }

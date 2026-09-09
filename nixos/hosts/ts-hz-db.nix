@@ -8,9 +8,9 @@
 
   custom.k3s = {
     role = "agent";
-    ownIp = "<TS-HZ-DB-IP>"; # FILL from `tofu output nodes` (Stage 2.2)
-    peerIp = "<TS-HZ-CTL-IP>"; # FILL from `tofu output nodes` (Stage 2.2)
-    officeIp = "<OFFICE-IP>"; # office public IPv4 — SSH only source
-    serverAddr = "https://<TS-HZ-CTL-IP>:6443"; # FILL (Stage 2.2)
+    ownIp = "178.104.247.194"; # Hetzner nbg1 (tofu output nodes.db)
+    peerIp = "46.224.91.55"; # ts-hz-ctl
+    officeIp = "108.56.153.222"; # office public IPv4 — SSH only source
+    serverAddr = "https://46.224.91.55:6443"; # ts-hz-ctl k3s API
   };
 }

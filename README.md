@@ -40,7 +40,7 @@ Node-level secrets (k3s token, tunnel credentials, optional rclone config) are
 
 ```sh
 gh auth status                            # prerequisite: 2143-Labs org access
-cloudflared tunnel create timestone       # Stage 1 — prints the tunnel UUID
+eval "$(age -d -i ~/.ssh/age ~/.config/timestone/providers.env.age | sed 's/^/export /')"  # office tokens
 bin/apply-nodes.sh                        # Stage 2 — HCLOUD_TOKEN + TF_VAR_office_cidr…
 bin/install-nixos.sh ts-hz-ctl <ip>       # Stage 3 — server first, then ts-hz-db
 bin/cycle-node.sh <host> <ip>             # rolling OS update (drain→rebuild→reboot)
@@ -83,3 +83,14 @@ gh secret set HCLOUD_TOKEN --repo 2143-Labs/timestone-tofu
 The office age env file (`~/.config/timestone/providers.env.age`) remains the
 canonical store for local runs and for one-time Stage 3 installs (see
 `secrets/README.md`); the GitHub secrets mirror it for CI.
+
+## Phase 1 nodes (live — 2026-09-09, Hetzner nbg1)
+
+| Host | IPv4 | k3s role | Node label | Workloads |
+|---|---|---|---|---|
+| ts-hz-ctl | `46.224.91.55` | server (`--cluster-init`, embedded etcd) | `timestone.io/controlplane=true` | ArgoCD, Traefik, cloudflared |
+| ts-hz-db | `178.104.247.194` | agent | `timestone.io/workload=primary` | CNPG primary, Temporal |
+
+SSH + kube API (6443) are open to the office IP only (`108.56.153.222/32`),
+enforced by the hcloud firewall and the NixOS OS firewall. Rolling update:
+`bin/cycle-node.sh ts-hz-ctl 46.224.91.55`.
