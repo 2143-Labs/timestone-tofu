@@ -44,22 +44,64 @@ ssh -o StrictHostKeyChecking=accept-new root@<ip> true   # both output IPs
 # Fill node IPs into ../nixos/hosts/*.nix (ownIp/peerIp/serverAddr) NOW.
 ```
 
-## Stage 3 — NixOS + k3s + ArgoCD
+## Stage 3 — age prep → NixOS install → k3s + ArgoCD
+
+### 3.1 age secrets (office; keeps the shared node identity)
 
 ```sh
-# (office) one shared age identity for the nodes:
-age-keygen -o age-identity   # keep private on office; pub → secrets/secrets.nix
-# encrypt the .age files (office age key + the node age-identity pub):
-#   secrets/timestone/k3s-token.age            (openssl rand -base64 32)
-#   secrets/timestone/cloudflared-tunnel.age   (contents of ~/.cloudflared/<uuid>.json)
-#   secrets/timestone/home-s3-rclone.age       (only if backups wanted)
-# age files ARE committed (ciphertext only) — the remote-flake auto-update and
-# the one-shot bootstraps must be able to re-evaluate from the public repo.
-cd ../nixos && nix develop
-bin/install-nixos.sh ts-hz-ctl <ctl-ip>   # server first, then:
-bin/install-nixos.sh ts-hz-db  <db-ip>
-# verify on ts-hz-ctl: k3s active, 2 nodes Ready, argocd-bootstrap +
-# k8s-secrets-bootstrap exited 0, argocd-server Running, both Secrets exist.
+# shared age identity for BOTH nodes (private pushed at install):
+age-keygen -o age-identity
+age-keygen -y age-identity          # → paste into nixos/secrets/secrets.nix
+                                    #   (replace age1PLACEHOLDER… for nodeAgeIdentity)
+mkdir -p nixos/.nixos-anywhere-extra/etc/ssh
+install -m 600 age-identity nixos/.nixos-anywhere-extra/etc/ssh/age-identity
+
+# tunnel credentials JSON ← tofu outputs + the env file (never a plaintext file):
+python3 - <<'EOF'
+import json, os
+creds = {
+  "AccountTag": os.environ["TF_VAR_account_id"],
+  "TunnelID": os.environ["TUNNEL_ID"],          # tofu -chdir=cloudflare output tunnel_id
+  "TunnelSecret": os.environ["TUNNEL_SECRET"],  # same value given to the tunnel resource
+}
+open("/tmp/timestone-tunnel.json", "w").write(json.dumps(creds))
+EOF
+cd nixos && nix develop
+# encrypt k3s token + tunnel creds for office + nodeAgeIdentity:
+echo -n "<k3s-token: python3 -c 'import secrets;print(secrets.token_urlsafe(32))'>" > /tmp/k3s-token
+agenix -e secrets/timestone/k3s-token.age          # paste token, save → re-encrypts
+agenix -e secrets/timestone/cloudflared-tunnel.age # paste JSON from /tmp/timestone-tunnel.json
+rm /tmp/k3s-token /tmp/timestone-tunnel.json
+# age files ARE committed (ciphertext only) — required for the remote-flake
+# auto-update + one-shot bootstraps to re-evaluate from the public repo.
+# Fill <TUNNEL_ID> in ../timestone-argo/base/cloudflared/configmap.yaml too.
+```
+
+### 3.2 install (server FIRST)
+
+```sh
+cd nixos && nix develop        # provides nixos-anywhere (devShell)
+../bin/install-nixos.sh ts-hz-ctl <ctl-ip>   # then:
+../bin/install-nixos.sh ts-hz-db  <db-ip>
+```
+
+### 3.3 verify (on ts-hz-ctl)
+
+k3s active (`systemctl status k3s`); `kubectl get nodes` shows **both Ready**
+(ctl + db); `argocd-bootstrap` + `k8s-secrets-bootstrap` exit 0;
+`argocd-server` Running; Secrets `temporal-db-password` +
+`cloudflared-credentials` exist in ns default. Then COMMIT + push the age files
+same day (the 04:10 auto-update timer needs them on the remote branch to
+evaluate).
+
+### 3.4 office kubeconfig (Stages 4–5 run from here, not the node)
+
+```sh
+ssh root@<ctl-ip> 'sed "s/127.0.0.1/<ctl-ip>/" /etc/rancher/k3s/k3s.yaml' \
+  > ~/.kube/timestone.yaml
+chmod 600 ~/.kube/timestone.yaml
+export KUBECONFIG=~/.kube/timestone.yaml    # context `default`
+kubectl get nodes                             # both Ready, from the office
 ```
 
 ## Stage 4 — ArgoCD wave sync
