@@ -87,24 +87,18 @@ in {
       Type = lib.mkForce "simple";
       TimeoutStopSec = lib.mkForce "120s";
     };
-    # ── OS firewall (source-restrictive backstop; the Hetzner edge firewall
-    #    mirrors these for defense in depth) ──
-    networking.firewall.allowedTCPPorts = []; # nothing wide open — all source-limited
-    networking.firewall.allowedUDPPorts = [];
-    networking.firewall.extraInputRules = let
-      # apiserver→kubelet (10250) and supervisor traffic originate from the peer
-      # node AND from this node itself (local→local via the node IP traverses
-      # the input chain), so both source IPs are allowed for the cluster ports.
-      clusterSrcs = "${cfg.peerIp}, ${cfg.ownIp}";
-      peerPorts = "tcp dport { 179, 7946, 10250 }";
-    in ''
-      # operator: SSH (+ kube API on the server)
-      ip saddr ${cfg.officeIp} tcp dport { 22 ${lib.optionalString isServer ", 6443"} } accept
-      ip saddr ${cfg.officeIp} ip protocol icmp accept
-      # k3s cluster traffic (peer node + self; VXLAN and supervisor/kubelet)
-      ip saddr { ${clusterSrcs} } udp dport 8472 accept
-      ip saddr { ${clusterSrcs} } ${peerPorts} accept
-      ${lib.optionalString isServer "ip saddr ${cfg.peerIp} tcp dport 6443 accept # agent → apiserver"}
-    '';
+    # ── OS firewall ──
+    # Source restriction lives at the HETZNER EDGE firewall (verified
+    # default-deny): it allows SSH + kube API only from the office IP and the
+    # k3s cluster ports only between the two nodes. At the OS level we open
+    # exactly the ports k3s serves (home-proven pattern); the edge drops
+    # everything else before it reaches the OS.
+    networking.firewall.allowedTCPPorts =
+      [22] # sshd
+      ++ lib.optionals isServer [6443] # kube API (agent side not needed)
+      ++ [10250 7946]; # kubelet / supervisor
+    networking.firewall.allowedUDPPorts = [
+      8472 # flannel VXLAN
+    ];
   };
 }
