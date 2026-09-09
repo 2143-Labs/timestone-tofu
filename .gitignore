@@ -1,0 +1,19 @@
+# Terraform/OpenTofu state — never commit
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Local secrets & env — never commit
+.envrc
+*.env
+**/secrets/*.age
+!**/secrets/README.md
+age.key
+*.pem
+*.key
