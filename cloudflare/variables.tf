@@ -1,4 +1,4 @@
-# Cloudflare edge — c.hero.rehab child zone + named tunnel + wildcard CNAME
+# Cloudflare edge — hero-rehab.xyz apex zone + named tunnel + wildcard CNAME
 
 variable "cloudflare_api_token" {
   description = "Cloudflare API token (Zone:DNS:Edit, Zone:Zone:Edit, Account:Cloudflare Tunnel:Edit). Never in files."
@@ -12,9 +12,9 @@ variable "account_id" {
 }
 
 variable "zone_name" {
-  description = "Child zone delegated from hero.rehab (parent at Porkbun)"
+  description = "Apex zone hero-rehab.xyz (registered for Timestone)"
   type        = string
-  default     = "c.hero.rehab"
+  default     = "hero-rehab.xyz"
 }
 
 variable "tunnel_secret" {

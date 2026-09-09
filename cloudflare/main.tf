@@ -3,8 +3,8 @@
 #
 # Apply once CLOUDFLARE_API_TOKEN (Zone:DNS:Edit + Zone:Zone:Edit +
 # Account:Cloudflare Tunnel:Edit) and TF_VAR_account_id + TF_VAR_tunnel_secret
-# are set. The child zone goes pending until the parent-zone NS delegation at
-# Porkbun lands (tofu is idempotent — safe to re-run).
+# are set. The apex zone goes pending until NS is delegated at the
+# hero-rehab.xyz registrar (tofu is idempotent — safe to re-run).
 terraform {
   required_version = ">= 1.6"
   required_providers {
@@ -19,8 +19,8 @@ provider "cloudflare" {
   api_token = var.cloudflare_api_token
 }
 
-# Full child zone c.hero.rehab — CF becomes authoritative (v5 resource: full
-# setup, `account` = account id). Universal SSL covers *.c.hero.rehab
+# Full apex zone hero-rehab.xyz — CF becomes authoritative (v5 resource: full
+# setup, `account` = account id). Universal SSL covers *.hero-rehab.xyz
 # automatically. PENDING until the parent publishes our nameservers.
 resource "cloudflare_zone" "timestone" {
   account = { id = var.account_id }
@@ -40,7 +40,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "timestone" {
 
 # Proxied wildcard CNAME → the tunnel. Cloudflare accepts a bare "*" record and
 # auto-proxies it (verified 2026-09); one record covers every hostname the
-# tunnel ingress routes, so new *.c.hero.rehab services need no DNS change.
+# tunnel ingress routes, so new *.hero-rehab.xyz services need no DNS change.
 resource "cloudflare_dns_record" "wildcard_tunnel" {
   zone_id = cloudflare_zone.timestone.id
   name    = "*"
@@ -48,5 +48,5 @@ resource "cloudflare_dns_record" "wildcard_tunnel" {
   content = "${cloudflare_zero_trust_tunnel_cloudflared.timestone.id}.cfargotunnel.com"
   proxied = true
   ttl     = 1 # proxied records ignore TTL; 1 = auto
-  comment = "Timestone tunnel wildcard — all *.c.hero.rehab hostnames"
+  comment = "Timestone tunnel wildcard — all *.hero-rehab.xyz hostnames"
 }

@@ -1,5 +1,5 @@
 output "zone_ns" {
-  description = "The two Cloudflare nameservers to publish at the parent (Porkbun)"
+  description = "The two Cloudflare nameservers to publish at the hero-rehab.xyz registrar"
   value       = cloudflare_zone.timestone.name_servers
 }
 

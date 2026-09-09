@@ -11,7 +11,7 @@ like* and how they boot. Canonical architecture & cost:
 ```
 hetzner/      # hcloud: ts-hz-ctl (CX23) + ts-hz-db (CX33), Nuremberg; firewall
               #   (SSH + kube API from the office IP only)
-cloudflare/   # c.hero.rehab child zone + wildcard tunnel CNAME (apply after tunnel)
+cloudflare/   # hero-rehab.xyz apex zone + wildcard tunnel CNAME (apply after tunnel)
 bootstrap/    # Stage 1→5 operator runbook (nixos-anywhere → k3s → ArgoCD)
 nixos/        # NixOS sub-flake for the hosts (flake.nix, modules/, hosts/, secrets/)
 bin/          # apply-nodes.sh · install-nixos.sh · cycle-node.sh

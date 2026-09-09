@@ -1,7 +1,7 @@
 # Bootstrap — Stage 1→5 runbook (operator checklist)
 
 Bring Timestone Phase 1 (Hetzner-only) from zero to
-`https://whoami.c.hero.rehab` + `https://temporal.c.hero.rehab` returning 200.
+`https://whoami.hero-rehab.xyz` + `https://temporal.hero-rehab.xyz` returning 200.
 
 The plan this implements: `timestone-phase1-hetzner-plan.md` (approved). Stages 0
 (commit) and 1 (zone/push) are one-time; 2–5 are per-bring-up. Rollback is clean
@@ -13,8 +13,8 @@ at every stage (see plan §Assumptions).
 - [ ] Hetzner project `timestone` exists; project-scoped R/W token ready
       (export `HCLOUD_TOKEN`)
 - [ ] Office public IPv4 known (this machine's egress IP) → `TF_VAR_office_cidr=<ip>/32`
-- [ ] Cloudflare API token (Zone:DNS:Edit + Zone:Zone:Edit) + account id; `hero.rehab`
-      at Porkbun (NS edits manual)
+- [ ] Cloudflare API token (Zone:DNS:Edit + Zone:Zone:Edit) + account id; `hero-rehab.xyz`
+      at the registrar (NS edits manual)
 - [ ] (optional) Home SeaweedFS S3 creds for `timestone-backups` → skip backups
       this phase if absent (documented omission)
 
@@ -25,8 +25,8 @@ at every stage (see plan §Assumptions).
 eval "$(age -d -i ~/.ssh/age ~/.config/timestone/providers.env.age | sed 's/^/export /')"
 export TF_VAR_tunnel_secret="$TUNNEL_SECRET"   # from providers.env.age
 tofu -chdir=cloudflare init && tofu -chdir=cloudflare apply
-# → zone c.hero.rehab (PENDING until delegated) + tunnel `timestone` + wildcard CNAME
-tofu -chdir=cloudflare output zone_ns          # → Porkbun NS records (manual, browser)
+# → zone hero-rehab.xyz (PENDING until delegated) + tunnel `timestone` + wildcard CNAME
+tofu -chdir=cloudflare output zone_ns          # → registrar NS records (manual, browser)
 # re-apply until the zone is Active; then:
 tofu -chdir=cloudflare output tunnel_id        # → fill <TUNNEL_ID> in timestone-argo
                                                #   base/cloudflared/configmap.yaml + creds JSON

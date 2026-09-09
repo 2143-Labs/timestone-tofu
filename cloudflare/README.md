@@ -1,4 +1,4 @@
-# Cloudflare edge — c.hero.rehab child zone + tunnel + wildcard CNAME
+# Cloudflare edge — hero-rehab.xyz apex zone + tunnel + wildcard CNAME
 
 Edge-only by sovereignty rule (§ timestone.md §4): DNS + tunnel at Cloudflare; EU
 compute/data at rest only. Nothing sensitive terminates here. Tunnel *connectors*
@@ -6,7 +6,7 @@ compute/data at rest only. Nothing sensitive terminates here. Tunnel *connectors
 
 ## What this directory provisions
 
-- `cloudflare_zone` — full child zone `c.hero.rehab` (CF-authoritative)
+- `cloudflare_zone` — full apex zone `hero-rehab.xyz` (CF-authoritative)
 - `cloudflare_zero_trust_tunnel_cloudflared` — named tunnel `timestone`
   (created via the API — no interactive `cloudflared tunnel login` needed)
 - `cloudflare_record` — proxied wildcard `*` CNAME → `<tunnel-id>.cfargotunnel.com`
@@ -27,16 +27,17 @@ Env vars required:
 - `CLOUDFLARE_API_TOKEN` — Zone:DNS:Edit + Zone:Zone:Edit +
   **Account:Cloudflare Tunnel:Edit** (the tunnel resource needs it)
 - `TF_VAR_account_id`
-- `TF_VAR_tunnel_secret` — `python3 -c "import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode())"`
+- `TF_VAR_tunnel_secret` — 32-byte base64 WITHOUT `=` padding:
+  `python3 -c "import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode().rstrip('='))"`
   (keep the same value for the Stage 3.1 credentials JSON!)
 
 Then:
 
 ```sh
 tofu -chdir=cloudflare init && tofu -chdir=cloudflare apply
-# zone is PENDING until delegated. Porkbun (parent zone hero.rehab):
-#   NS records c.hero.rehab → the two nameservers from `tofu output zone_ns`
-# re-run tofu apply until the zone is active; Universal SSL covers *.c.hero.rehab.
+# zone is PENDING until the registrar nameservers are set (hero-rehab.xyz):
+#   NS hero-rehab.xyz → the two nameservers from `tofu output zone_ns`
+# re-run tofu apply until the zone is active; Universal SSL covers *.hero-rehab.xyz.
 tofu -chdir=cloudflare output tunnel_id        # → fill timestone-argo ConfigMap + creds JSON
 ```
 
