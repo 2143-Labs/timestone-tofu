@@ -27,6 +27,13 @@
         kubectl get nodes &>/dev/null && break
         sleep 2
       done
+      # Idempotent: this oneshot re-runs on every `nixos-rebuild switch`
+      # (wantedBy multi-user). If ArgoCD is already installed, do nothing —
+      # never re-apply over a live install.
+      if kubectl -n argocd get deployment argocd-server &>/dev/null; then
+        echo "argocd already installed — skipping bootstrap"
+        exit 0
+      fi
       # Install CRDs first (--server-side avoids annotation size limits)
       kubectl apply --server-side --force-conflicts \
         -k https://github.com/argoproj/argo-cd/manifests/crds?ref=stable
@@ -71,8 +78,11 @@ CMEOF
       kubectl rollout restart deployment/argocd-server -n argocd || true
       kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=60s || true
       # Apply root Application — wires ArgoCD to the public GitOps repo.
-      # Public repo → no repository Secret, no credentials on the node.
-      kubectl apply -f https://raw.githubusercontent.com/2143-Labs/timestone-argo/main/argocd/root-app.yaml
+      # Non-fatal: the repo may not be pushed yet on a fresh install; apply it
+      # imperatively once the push happens (Stage 4.1):
+      #   kubectl -n argocd apply -f https://raw.githubusercontent.com/2143-Labs/timestone-argo/main/argocd/root-app.yaml
+      kubectl apply -f https://raw.githubusercontent.com/2143-Labs/timestone-argo/main/argocd/root-app.yaml \
+        || echo "root Application deferred — apply after the timestone-argo push (see bootstrap README Stage 4)"
       kubectl wait --for=condition=available deployment/argocd-server -n argocd --timeout=120s || true
     '';
   };
