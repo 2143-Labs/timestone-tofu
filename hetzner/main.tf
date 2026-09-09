@@ -50,9 +50,72 @@ resource "hcloud_server" "ts_hz_db" {
   }
 }
 
+# Kube API + SSH reachable ONLY from the office public IP (sovereignty admin
+# model), plus the k3s peer-node traffic between the two servers. hcloud
+# firewalls are inbound-only — cloudflared needs no inbound rule (outbound
+# tunnel egress); do NOT open 80/443 to the internet.
+# The NixOS OS firewall mirrors these rules source-for-source (defense in depth
+# even if the edge semantics were ever permissive).
+locals {
+  peer_ips = [
+    hcloud_server.ts_hz_ctl.ipv4_address,
+    hcloud_server.ts_hz_db.ipv4_address,
+  ]
+}
+
+resource "hcloud_firewall" "timestone" {
+  name = "timestone"
+
+  # operator: SSH + kube API + ICMP, office IP only
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "22" # SSH (nixos-anywhere, operator)
+    source_ips = [var.office_cidr]
+  }
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "6443"                                    # kube API
+    source_ips = concat([var.office_cidr], local.peer_ips) # agent → apiserver
+  }
+  rule {
+    direction  = "in"
+    protocol   = "icmp"
+    source_ips = [var.office_cidr]
+  }
+
+  # k3s cluster ports between the two peers (flannel VXLAN + supervisor/kubelet)
+  dynamic "rule" {
+    for_each = toset(["179", "7946", "10250"])
+    content {
+      direction  = "in"
+      protocol   = "tcp"
+      port       = rule.value
+      source_ips = local.peer_ips
+    }
+  }
+  rule {
+    direction  = "in"
+    protocol   = "udp"
+    port       = "8472"
+    source_ips = local.peer_ips
+  }
+}
+
+resource "hcloud_firewall_attachment" "timestone_ctl" {
+  firewall_id = hcloud_firewall.timestone.id
+  server_ids  = [hcloud_server.ts_hz_ctl.id]
+}
+
+resource "hcloud_firewall_attachment" "timestone_db" {
+  firewall_id = hcloud_firewall.timestone.id
+  server_ids  = [hcloud_server.ts_hz_db.id]
+}
+
 output "nodes" {
   value = {
     ctl = { name = hcloud_server.ts_hz_ctl.name, ipv4 = hcloud_server.ts_hz_ctl.ipv4_address }
-    db  = { name = hcloud_server.ts_hz_db.name,  ipv4 = hcloud_server.ts_hz_db.ipv4_address }
+    db  = { name = hcloud_server.ts_hz_db.name, ipv4 = hcloud_server.ts_hz_db.ipv4_address }
   }
 }

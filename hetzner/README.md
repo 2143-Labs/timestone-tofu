@@ -1,28 +1,30 @@
 # Hetzner leg — ts-hz-ctl + ts-hz-db (Nuremberg, nbg1)
 
-Sovereign EU primary leg: control node (CX23) + DB node (CX33) running CNPG primary,
-Temporal, Traefik, cloudflared. Active pricing per `../timestone.md` §3.
+Sovereign EU primary leg: control node (CX23) + DB node (CX33) running CNPG
+primary, Temporal, Traefik, cloudflared. Active pricing per `../timestone.md`
+§3 (CX23 ≈ $6.47/mo, CX33 ≈ $9.17/mo as of 2026-09 — re-check the console
+before committing spend; IPv4 is billed extra and included here).
 
-Run `tofu plan/apply` in THIS directory after exporting `HCLOUD_TOKEN`.
+Run `tofu plan/apply` in THIS directory after exporting `HCLOUD_TOKEN` +
+`TF_VAR_office_cidr` + `TF_VAR_ssh_public_key` (or use `../bin/apply-nodes.sh`).
 
-## Notes
+## What this module creates
 
-- Prices are as of 2026-09 (Hetzner raised CX/CPX ~30-40% on 2026-06-15); re-check
-  the console before committing spend.
-- IPv4 is billed extra (€0.50/mo/node) and is included in the node sizing here.
-- NixOS image + k3s join happen via `../bootstrap` (nixos-anywhere), NOT here — this
-  module only creates the VMs, labels, SSH key, and minimal firewall records.
+- `hcloud_ssh_key` — the 2143 Labs ops public key (path via `TF_VAR_ssh_public_key`).
+- `hcloud_server` ts-hz-ctl (CX23) + ts-hz-db (CX33), Ubuntu 24.04 placeholder
+  image — NixOS arrives via nixos-anywhere (`../bin/install-nixos.sh`).
+- `hcloud_firewall` `timestone` — inbound allow rules for the operator
+  (SSH 22 + kube API 6443 + ICMP) and the k3s peer ports, attached to both
+  servers. Defense in depth: the NixOS OS firewall (nixos `k3s-timestone.nix`)
+  enforces the same source restriction (office IP + peer node IP) even if the
+  Hetzner edge rules were ever permissive.
 
-## Placeholders to fill before first apply
+## Node labels / placement
 
-- `hcloud_ssh_key` resource references the public key file for 2143 Labs ops —
-  provide path via `TF_VAR_ssh_public_key` (do NOT commit the private key).
-- `labels` use `managed-by=tofu`, `leg=hetzner`, `role=ctl|db` for cost tagging
-  (feeds the public cost post).
+- `ts-hz-db` registers `--node-label timestone.io/workload=primary` at k3s join —
+  the CNPG Cluster's `nodeSelector` pins the postgres instance to the CX33.
+- `ts-hz-ctl` registers `timestone.io/controlplane=true` (server).
 
-## Firewall (TODO before production)
-
-Default-deny inbound; open only what the tailnet + mesh need (WireGuard/Tailscale
-port on gateway nodes, 6443 on control nodes reachable via tailnet only). Cloudflared
-needs NO inbound rule (outbound-only egress). Do not open 80/443 to the internet —
-all public ingress is via the CF tunnel.
+No taints on either node this phase. cloudflared needs NO inbound rule
+(outbound-only egress); 80/443 are never opened to the internet — public ingress
+is exclusively via the CF tunnel.

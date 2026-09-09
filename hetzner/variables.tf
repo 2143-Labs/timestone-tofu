@@ -22,3 +22,8 @@ variable "location" {
   type        = string
   default     = "nbg1" # Nuremberg. Alternatives: fsn1 (Falkenstein), hel1 (Helsinki)
 }
+
+variable "office_cidr" {
+  description = "Office public IPv4 /32 — the ONLY source allowed SSH + kube API access (no default: tofu fails loudly if unset)"
+  type        = string
+}

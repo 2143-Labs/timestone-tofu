@@ -12,8 +12,12 @@ override.tf.json
 # Local secrets & env — never commit
 .envrc
 *.env
-**/secrets/*.age
-!**/secrets/README.md
+# The nixos/secrets/timestone/*.age files ARE committed — they are age
+# CIPHERTEXT (useless without the office/nodes keys) and must be present in the
+# fetched public flake for the nodes' remote auto-update to evaluate. Never
+# commit plaintext secret material (see nixos/secrets/README.md).
+.nixos-anywhere-extra/
+age-identity
 age.key
 *.pem
 *.key

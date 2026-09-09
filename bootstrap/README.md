@@ -1,30 +1,82 @@
-# Bootstrap — nixos-anywhere → k3s → ArgoCD
+# Bootstrap — Stage 1→5 runbook (operator checklist)
 
-Order of operations to bring a fresh VM from "provider console" to "ArgoCD-synced
-k3s node". Not runnable yet — NixOS host modules are not authored (see `../nixos/`).
+Bring Timestone Phase 1 (Hetzner-only) from zero to
+`https://whoami.c.hero.rehab` + `https://temporal.c.hero.rehab` returning 200.
 
-## Per host
+The plan this implements: `timestone-phase1-hetzner-plan.md` (approved). Stages 0
+(commit) and 1 (zone/push) are one-time; 2–5 are per-bring-up. Rollback is clean
+at every stage (see plan §Assumptions).
+
+## Prerequisites (all must hold — else STOP and report which one)
+
+- [ ] `gh auth status` works (org 2143-Labs)
+- [ ] Hetzner project `timestone` exists; project-scoped R/W token ready
+      (export `HCLOUD_TOKEN`)
+- [ ] Office public IPv4 known (this machine's egress IP) → `TF_VAR_office_cidr=<ip>/32`
+- [ ] Cloudflare API token (Zone:DNS:Edit + Zone:Zone:Edit) + account id; `hero.rehab`
+      at Porkbun (NS edits manual)
+- [ ] (optional) Home SeaweedFS S3 creds for `timestone-backups` → skip backups
+      this phase if absent (documented omission)
+
+## Stage 1 — Cloudflare zone + GitHub push
 
 ```sh
-# 1. Provision VM (Hetzner: tofu in ../hetzner; OVH: console — see ../ovh)
-# 2. Install NixOS (when ../nixos/hosts/<host>.nix exists):
-nixos-anywhere --flake "path:../nixos#<host>" root@<ip>
-# 3. Join k3s: control nodes init with --cluster-init + fixed token from agenix;
-#    db/app nodes join via the tailnet registration URL.
-# 4. Install ArgoCD + apply root Application (from timestone-argo/argocd/root-app.yaml)
-# 5. Wave sync: cnpg-operator → clusters → temporal → traefik → apps → cloudflared
+cloudflared tunnel login            # browser, one time
+cloudflared tunnel create timestone # prints UUID → export TF_VAR_tunnel_id
+# dashboard: add zone c.hero.rehab (Free/Full) → copy the 2 NS
+CLOUDFLARE_API_TOKEN=… TF_VAR_tunnel_id=<uuid> TF_VAR_account_id=… \
+  tofu -chdir=cloudflare apply
+# Porkbun: NS c.hero.rehab → the 2 CF nameservers (manual, browser); re-apply until active
+gh repo create 2143-Labs/timestone-argo  --public --source timestone-argo  --push
+gh repo create 2143-Labs/timestone-tofu  --public --source timestone-tofu  --push
 ```
 
-## Node plan
+## Stage 2 — Hetzner nodes
 
-| Host | Provider | Role |
-|---|---|---|
-| ts-hz-ctl | Hetzner nbg1 | k3s control, ArgoCD, Traefik, cloudflared |
-| ts-hz-db | Hetzner nbg1 | k3s, CNPG primary, Temporal |
-| ts-ov-ctl | OVH GRA | k3s control, Traefik, cloudflared |
-| ts-ov-db | OVH GRA | k3s, CNPG replica, apps, Temporal standby |
+```sh
+HCLOUD_TOKEN=… TF_VAR_office_cidr=<office-ip>/32 TF_VAR_ssh_public_key=<key.pub> \
+  tofu -chdir=hetzner init && tofu -chdir=hetzner apply
+ssh -o StrictHostKeyChecking=accept-new root@<ip> true   # both output IPs
+# Fill node IPs into ../nixos/hosts/*.nix (ownIp/peerIp/serverAddr) NOW.
+```
+
+## Stage 3 — NixOS + k3s + ArgoCD
+
+```sh
+# (office) one shared age identity for the nodes:
+age-keygen -o age-identity   # keep private on office; pub → secrets/secrets.nix
+# encrypt the .age files (office age key + the node age-identity pub):
+#   secrets/timestone/k3s-token.age            (openssl rand -base64 32)
+#   secrets/timestone/cloudflared-tunnel.age   (contents of ~/.cloudflared/<uuid>.json)
+#   secrets/timestone/home-s3-rclone.age       (only if backups wanted)
+# age files ARE committed (ciphertext only) — the remote-flake auto-update and
+# the one-shot bootstraps must be able to re-evaluate from the public repo.
+cd ../nixos && nix develop
+bin/install-nixos.sh ts-hz-ctl <ctl-ip>   # server first, then:
+bin/install-nixos.sh ts-hz-db  <db-ip>
+# verify on ts-hz-ctl: k3s active, 2 nodes Ready, argocd-bootstrap +
+# k8s-secrets-bootstrap exited 0, argocd-server Running, both Secrets exist.
+```
+
+## Stage 4 — ArgoCD wave sync
+
+```sh
+kubectl -n argocd get application root        # → Synced/Healthy
+kubectl get applications -n argocd -w         # all Synced+Healthy
+kubectl -n default logs deploy/cloudflared    # "Registered tunnel connection" ×2
+kubectl -n default get svc                    # timestone-rw + temporal services
+```
+
+## Stage 5 — End-to-end verification
+
+External checks from the office machine (NOT node-local): dig/curl the two
+hostnames, Gateway `Programmed=True`, 404 on unknown hostnames, in-cluster
+`select 1`, ArgoCD UI healthy, rolling `nixos-rebuild switch` on both nodes,
+`systemctl list-timers` shows the daily update.
 
 ## Secrets at bootstrap
 
-Tokens/secrets are injected on the host by the agenix oneshot (`k8s-secrets-bootstrap`,
-59s pattern) — never present in these repos.
+Secrets are injected on the host by the agenix oneshot (`k8s-secrets-bootstrap`,
+59s pattern) — never present as plaintext in these repos. `k8s-secrets-bootstrap`
+is idempotent: it never rotates an existing Secret (DB password stability under
+CNPG/Temporal).

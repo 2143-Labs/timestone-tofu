@@ -1,20 +1,22 @@
-# timestone-tofu — Timestone IaC (OpenTofu)
+# timestone-tofu — Timestone IaC (OpenTofu + NixOS)
 
-Sovereign EU infrastructure for Timestone: Hetzner + OVH compute legs, Cloudflare
-edge glue, NixOS host provisioning. Deploy-time cluster content lives in
-[`timestone-argo`](../timestone-argo/) — this repo is *what accounts/VMs look like*.
-
-Canonical architecture & cost: [`../timestone.md`](../timestone.md).
+Sovereign EU infrastructure for Timestone: Hetzner compute leg, Cloudflare edge
+glue, NixOS host provisioning. Deploy-time cluster content lives in
+[`timestone-argo`](../timestone-argo/) — this repo is *what accounts/VMs look
+like* and how they boot. Canonical architecture & cost:
+[`../timestone.md`](../timestone.md).
 
 ## Layout
 
 ```
-hetzner/      # hcloud provider: ts-hz-ctl (CX23), ts-hz-db (CX33), Nuremberg
-ovh/          # OVH leg. VPS is NOT terraform-manageable → manual console steps here
-cloudflare/   # c.hero.rehab child zone, named tunnel, Access — needs NS delegation first
-bootstrap/    # nixos-anywhere + k3s + ArgoCD bootstrap order
-nixos/        # NixOS host modules (planned — not yet authored)
-secrets/      # WHAT lives where — tokens are NEVER committed (see README)
+hetzner/      # hcloud: ts-hz-ctl (CX23) + ts-hz-db (CX33), Nuremberg; firewall
+              #   (SSH + kube API from the office IP only)
+cloudflare/   # c.hero.rehab child zone + wildcard tunnel CNAME (apply after tunnel)
+bootstrap/    # Stage 1→5 operator runbook (nixos-anywhere → k3s → ArgoCD)
+nixos/        # NixOS sub-flake for the hosts (flake.nix, modules/, hosts/, secrets/)
+bin/          # apply-nodes.sh · install-nixos.sh · cycle-node.sh
+ovh/          # OVH leg (phase 2). VPS is NOT terraform-manageable → manual console
+secrets/      # WHERE secrets live — never plaintext in this repo (see README)
 ```
 
 ## State & secrets (READ FIRST)
@@ -25,20 +27,23 @@ this repo:
 | Tool | Env var | Where created |
 |---|---|---|
 | Hetzner | `HCLOUD_TOKEN` | Hetzner Console → project `timestone` → API token (project-scoped R/W) |
-| OVH | `OVH_ENDPOINT`, `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY` | OVH account → API tokens (IAM-restricted) |
-| Cloudflare | `CLOUDFLARE_API_TOKEN` | CF dashboard → API token (Zone:DNS:Edit on `c.hero.rehab`, Tunnel:Edit) |
+| Cloudflare | `CLOUDFLARE_API_TOKEN` | CF dashboard → API token (Zone:DNS:Edit, Zone:Zone:Edit) |
+| SSH/age | `~/.ssh/id_ed25519`, `~/.ssh/age` | office machine (nodes trust these) |
 
-Terraform state backends are NOT yet configured — per-provider remote state will land
-on home SeaweedFS S3 (`files.john2143.com`) once the home endpoint is wired. Until
-then, local state only and `.gitignore` keeps it out of git.
+Terraform state is local-only for now (`*.tfstate` gitignored); a remote
+backend lands once the home S3 endpoint is wired.
 
-## Bootstrap order
+Node-level secrets (k3s token, tunnel credentials, optional rclone config) are
+**age-encrypted** under `nixos/secrets/` (see its README) — never plaintext.
 
-1. Create Hetzner project `timestone` + token; OVH Public Cloud project + IAM user;
-   CF token. (Two cloud accounts already exist.)
-2. Delegate `c.hero.rehab` at Porkbun → CF nameservers, then `tofu` in `cloudflare/`.
-3. `tofu` in `hetzner/` → nodes up.
-4. Create OVH VPS in console (see `ovh/README.md`) → same NixOS image as Hetzner.
-5. `bootstrap/` → nixos-anywhere → k3s → ArgoCD root app (from timestone-argo).
+## Run
 
-Nothing in this repo is applied yet. All plans are local-only.
+```sh
+gh auth status                            # prerequisite: 2143-Labs org access
+cloudflared tunnel create timestone       # Stage 1 — prints the tunnel UUID
+bin/apply-nodes.sh                        # Stage 2 — HCLOUD_TOKEN + TF_VAR_office_cidr…
+bin/install-nixos.sh ts-hz-ctl <ip>       # Stage 3 — server first, then ts-hz-db
+bin/cycle-node.sh <host> <ip>             # rolling OS update (drain→rebuild→reboot)
+```
+
+Full checklist: [`bootstrap/README.md`](bootstrap/README.md).
