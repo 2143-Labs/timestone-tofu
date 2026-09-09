@@ -18,18 +18,22 @@ at every stage (see plan §Assumptions).
 - [ ] (optional) Home SeaweedFS S3 creds for `timestone-backups` → skip backups
       this phase if absent (documented omission)
 
-## Stage 1 — Cloudflare zone + GitHub push
+## Stage 1 — Cloudflare zone + tunnel (API, no browser); GitHub push PAUSED
 
 ```sh
-cloudflared tunnel login            # browser, one time
-cloudflared tunnel create timestone # prints UUID → export TF_VAR_tunnel_id
-# dashboard: add zone c.hero.rehab (Free/Full) → copy the 2 NS
-CLOUDFLARE_API_TOKEN=… TF_VAR_tunnel_id=<uuid> TF_VAR_account_id=… \
-  tofu -chdir=cloudflare apply
-# Porkbun: NS c.hero.rehab → the 2 CF nameservers (manual, browser); re-apply until active
-gh repo create 2143-Labs/timestone-argo  --public --source timestone-argo  --push
-gh repo create 2143-Labs/timestone-tofu  --public --source timestone-tofu  --push
+# Secrets: decrypt the office age env file into the shell (never into files):
+eval "$(age -d -i ~/.ssh/age ~/.config/timestone/providers.env.age | sed 's/^/export /')"
+export TF_VAR_tunnel_secret="$TUNNEL_SECRET"   # from providers.env.age
+tofu -chdir=cloudflare init && tofu -chdir=cloudflare apply
+# → zone c.hero.rehab (PENDING until delegated) + tunnel `timestone` + wildcard CNAME
+tofu -chdir=cloudflare output zone_ns          # → Porkbun NS records (manual, browser)
+# re-apply until the zone is Active; then:
+tofu -chdir=cloudflare output tunnel_id        # → fill <TUNNEL_ID> in timestone-argo
+                                               #   base/cloudflared/configmap.yaml + creds JSON
 ```
+
+The GitHub push (create 2143-Labs/timestone-{argo,tofu} --public --push) is
+**paused pending operator review** — repos stay local-only until told otherwise.
 
 ## Stage 2 — Hetzner nodes
 

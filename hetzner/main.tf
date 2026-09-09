@@ -31,7 +31,7 @@ resource "hcloud_server" "ts_hz_ctl" {
     managed-by = "tofu"
     leg        = "hetzner"
     role       = "control-plane"
-    workload   = "argocd,traefik,cloudflared"
+    workload   = "argocd-traefik-cloudflared"
   }
 }
 
@@ -46,7 +46,7 @@ resource "hcloud_server" "ts_hz_db" {
     managed-by = "tofu"
     leg        = "hetzner"
     role       = "database"
-    workload   = "cnpg-primary,temporal"
+    workload   = "cnpg-temporal"
   }
 }
 
