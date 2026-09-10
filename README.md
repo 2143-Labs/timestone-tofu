@@ -1,9 +1,12 @@
 # timestone-tofu — Timestone IaC (OpenTofu + NixOS)
 
 Sovereign EU infrastructure for Timestone: Hetzner compute leg, Cloudflare edge
-glue, NixOS host provisioning. Deploy-time cluster content lives in
-[`timestone-argo`](../timestone-argo/) — this repo is *what accounts/VMs look
-like* and how they boot. Canonical architecture & cost:
+glue, NixOS host provisioning for the **prod** environment (Hetzner cluster;
+domain `hero-rehab.xyz` now → `hero.rehab` after the demo). The **nonprod**
+environment runs on the home cluster and is apps-only (no tofu) — see
+[`../timestone-argo/nonprod/`](../timestone-argo/nonprod/). Deploy-time cluster
+content lives in [`timestone-argo`](../timestone-argo/) — this repo is *what
+accounts/VMs look like* and how they boot. Canonical architecture & cost:
 [`../timestone.md`](../timestone.md).
 
 ## Layout
@@ -84,7 +87,7 @@ The office age env file (`~/.config/timestone/providers.env.age`) remains the
 canonical store for local runs and for one-time Stage 3 installs (see
 `secrets/README.md`); the GitHub secrets mirror it for CI.
 
-## Phase 1 nodes (live — 2026-09-09, Hetzner nbg1)
+## Prod nodes (live — 2026-09-09, Hetzner nbg1)
 
 | Host | IPv4 | k3s role | Node label | Workloads |
 |---|---|---|---|---|
