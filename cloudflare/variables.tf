@@ -22,3 +22,15 @@ variable "tunnel_secret" {
   type        = string
   sensitive   = true
 }
+
+variable "access_emails" {
+  description = "Emails allowed through Cloudflare Access to the PRIVATE layer (*.int.hero-rehab.xyz)"
+  type        = list(string)
+  default     = ["john@john2143.com"]
+}
+
+variable "enable_internal_access" {
+  description = "Create the Cloudflare Zero Trust Access app for the PRIVATE layer (*.int.hero-rehab.xyz). Keep false while internal services are fully internal."
+  type        = bool
+  default     = false
+}
