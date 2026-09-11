@@ -1,30 +1,100 @@
-# Hetzner leg — ts-hz-ctl + ts-hz-db (Nuremberg, nbg1)
+# Hetzner leg — Talos Kubernetes backend + legacy k3s nodes
 
-Sovereign EU primary leg: control node (CX23) + DB node (CX33) running CNPG
-primary, Temporal, Traefik, cloudflared. Active pricing per `../timestone.md`
-§3 (CX23 ≈ $6.47/mo, CX33 ≈ $9.17/mo as of 2026-09 — re-check the console
-before committing spend; IPv4 is billed extra and included here).
+Sovereign EU compute leg. This module now manages **two** things:
 
-Run `tofu plan/apply` in THIS directory after exporting `HCLOUD_TOKEN` +
-`TF_VAR_office_cidr` + `TF_VAR_ssh_public_key` (or use `../bin/apply-nodes.sh`).
+1. **Legacy k3s/NixOS nodes** (`ts-hz-ctl` CX23 + `ts-hz-db` CX33, nbg1) — the
+   original Phase-1 deployment, scheduled for retirement (step 7 of the Talos
+   migration). Declarations remain in `main.tf` until then.
+2. **Talos backend** (three CX33 nodes, one each in nbg1/fsn1/hel1) — the
+   replacement control plane + workers, declared in `talos.tf`.
 
-## What this module creates
+Run `tofu plan/apply` in THIS directory. HCLOUD_TOKEN is read from the
+environment; `TF_VAR_office_cidr` is required.
 
-- `hcloud_ssh_key` — the 2143 Labs ops public key (path via `TF_VAR_ssh_public_key`).
-- `hcloud_server` ts-hz-ctl (CX23) + ts-hz-db (CX33), Ubuntu 24.04 placeholder
-  image — NixOS arrives via nixos-anywhere (`../bin/install-nixos.sh`).
-- `hcloud_firewall` `timestone` — inbound allow rules for the operator
-  (SSH 22 + kube API 6443 + ICMP) and the k3s peer ports, attached to both
-  servers. Defense in depth: the NixOS OS firewall (nixos `k3s-timestone.nix`)
-  enforces the same source restriction (office IP + peer node IP) even if the
-  Hetzner edge rules were ever permissive.
+## Talos backend — what it creates
 
-## Node labels / placement
+`talos.tf` provisions bare hcloud resources and renders Talos machine configs:
 
-- `ts-hz-db` registers `--node-label timestone.io/workload=primary` at k3s join —
-  the CNPG Cluster's `nodeSelector` pins the postgres instance to the CX33.
-- `ts-hz-ctl` registers `timestone.io/controlplane=true` (server).
+- `hcloud_primary_ip` + `hcloud_server` — three CX33 nodes, `location` spread
+  across nbg1/fsn1/hel1. Ubuntu 24.04 is only a pre-ISO carrier; Talos installs
+  from the factory installer image.
+- `hcloud_firewall` `timestone-talos` — Talos API (50000), kube API (6443),
+  ICMP from the office + peers; KubeSpan (51820/udp) between peers.
+- `talos_machine_secrets` — generated on first apply, or import an existing
+  talosctl `gen secrets` bundle (`tofu import talos_machine_secrets.this
+  ../.runtime/dummy/secrets.yaml`) to reuse across renders.
+- `data.talos_machine_configuration` (controlplane + worker) — rendered by the
+  siderolabs/talos provider using the same strategic-merge patch engine as
+  talosctl.
+- Gated live management (`var.talos_manage`): `talos_machine_configuration_apply`
+  (controlplane + workers), `talos_machine_bootstrap`, `talos_cluster`, and
+  `talos_cluster_kubeconfig` — all network calls to the live Talos API, planned
+  to 0 while `talos_manage = false`.
 
-No taints on either node this phase. cloudflared needs NO inbound rule
-(outbound-only egress); 80/443 are never opened to the internet — public ingress
-is exclusively via the CF tunnel.
+## Node roles / topology
+
+- **nbg1** = control-plane (bootstrap/API anchor).
+- **fsn1 + hel1** = workers (`var.talos_worker_count`, default 2).
+
+No node taints; the control-plane `node-role.kubernetes.io/control-plane`
+taint/LB-label are deleted from the control-plane config only (see patches).
+
+## Machine config patches (`patches/`)
+
+Patches are strategic-merge YAML applied via `config_patches`. They are split by
+scope because the configpatcher's `deleteForPath` does a strict map-key lookup:
+
+| Patch | Scope | Effect |
+|---|---|---|
+| `kubelet.yaml` | global | kubeReserved/systemReserved + `cloud-provider: external` |
+| `kubespan.yaml` | global | KubeSpan enabled, MTU 1420, no down-peer bypass |
+| `flannel.yaml` | control-plane | KubeFlannelCNIConfig backendMTU 1420 |
+| `controlplane-taint-labels.yaml` | control-plane | delete `exclude-from-external-load-balancers` label + control-plane taint |
+| (inline `yamlencode`) | global | `UnattendedInstallConfig` — install disk + factory installer image |
+
+The install patch uses Talos 1.14's `UnattendedInstallConfig` document (the
+legacy `machine.install` block is now incompatible). The factory installer image
+carries the `siderolabs/qemu-guest-agent` extension (Hetzner QEMU/KVM graceful
+shutdown); re-resolve it at bootstrap — see `../talos/versions.json`.
+
+The control-plane taint/LB-label deletion MUST stay control-plane-scoped: the
+worker KubeNodeConfig lacks those keys, and a global delete patch fails with
+"lookup failed" during merge.
+
+## Bootstrap / apply runbook
+
+1. **Preflight** — resolve datacenters/locations and generate secrets once:
+   ```sh
+   ../.tools/talosctl gen secrets -o ../.runtime/dummy/secrets.yaml
+   ```
+2. **Provision VMs** (needs `HCLOUD_TOKEN`):
+   ```sh
+   export HCLOUD_TOKEN=… TF_VAR_office_cidr=108.56.153.222/32
+   tofu init && tofu apply
+   ```
+3. **Import secrets into the provider** (reuse the generated bundle):
+   ```sh
+   tofu import talos_machine_secrets.this ../.runtime/dummy/secrets.yaml
+   ```
+4. **Render + inspect configs** (offline, no credentials):
+   ```sh
+   tofu plan   # shows talos_machine_secrets + deferred config renders
+   tofu apply  # writes rendered configs as sensitive outputs
+   ```
+5. **Bring up the cluster** (live, on the operator machine):
+   ```sh
+   tofu apply -var talos_manage=true
+   tofu output -raw talos_kubeconfig > ~/.kube/timestone
+   ```
+
+Until step 5 the three hcloud servers exist but are unconfigured Ubuntu hosts —
+no Talos API is reachable, so the gated `talos_manage` resources must stay off.
+
+## Key decisions (for the record)
+
+- **OpenTofu 1.12.6**, **talos provider 0.12.0-beta.0** (SDK `v1.14.0-rc.2`,
+  matches Talos 1.14.0 GA). Pinned in `../talos/versions.json`.
+- **Helm 4.3.0** (not v3) — pinned in versions.json; charts are deployed via
+  ArgoCD (sibling `timestone-argo`), the local helm binary is for operator use.
+- **hcloud provider 1.68.0** removed the `datacenter` attribute (2026-07-01);
+  nodes use `location` and the API auto-assigns the datacenter.

@@ -11,9 +11,9 @@ accounts/VMs look like* and how they boot. Canonical architecture & cost:
 
 ## Layout
 
-```
-hetzner/      # hcloud: ts-hz-ctl (CX23) + ts-hz-db (CX33), Nuremberg; firewall
-              #   (SSH + kube API from the office IP only)
+hetzner/      # hcloud: Talos backend (3× CX33, nbg1/fsn1/hel1) + legacy k3s nodes
+              #   (ts-hz-ctl CX23 + ts-hz-db CX33, Nuremberg — retirement step 7)
+talos/        # versions.json — pinned Talos/tofu/helm/chart/image versions + checksums
 cloudflare/   # hero-rehab.xyz apex zone + wildcard tunnel CNAME (apply after tunnel)
 bootstrap/    # Stage 1→5 operator runbook (nixos-anywhere → k3s → ArgoCD)
 nixos/        # NixOS sub-flake for the hosts (flake.nix, modules/, hosts/, secrets/)

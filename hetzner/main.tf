@@ -7,6 +7,10 @@ terraform {
       source  = "hetznercloud/hcloud"
       version = "~> 1.48"
     }
+    talos = {
+      source  = "siderolabs/talos"
+      version = "0.12.0-beta.0"
+    }
   }
   # Remote state backend TBD (home SeaweedFS S3). Local-only until then.
 }
