@@ -35,5 +35,5 @@ jobs:
       - name: init + validate
         working-directory: ${{ matrix.dir }}
         run: |
-          tofu init -input=false -no-color
+          tofu init -backend=false -input=false -no-color
           tofu validate -no-color
