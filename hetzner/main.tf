@@ -12,12 +12,16 @@ terraform {
 }
 
 provider "hcloud" {
-  token = var.hcloud_token
+  # token is read from the HCLOUD_TOKEN environment variable (migration: the
+  # previously-required variable/provider argument is removed).
 }
 
-resource "hcloud_ssh_key" "timestone_ops" {
-  name       = var.ssh_key_name
-  public_key = file(var.ssh_public_key)
+removed {
+  from = hcloud_ssh_key.timestone_ops
+  lifecycle {
+    # Non-destroying: the provider SSH key stays installed for legacy access.
+    destroy = false
+  }
 }
 
 # ts-hz-ctl — k3s control plane + ingress + ArgoCD (CX23: 2vCPU/4GB/40GB)
@@ -26,12 +30,16 @@ resource "hcloud_server" "ts_hz_ctl" {
   server_type = "cx23"
   location    = var.location
   image       = "ubuntu-24.04" # placeholder — NixOS image arrives via nixos-anywhere bootstrap
-  ssh_keys    = [hcloud_ssh_key.timestone_ops.id]
+  # ssh_keys deliberately absent: legacy installed SSH access is preserved via
+  # ignore_changes below (the hcloud_ssh_key is no longer Terraform-managed).
   labels = {
     managed-by = "tofu"
     leg        = "hetzner"
     role       = "control-plane"
     workload   = "argocd-traefik-cloudflared"
+  }
+  lifecycle {
+    ignore_changes = [ssh_keys]
   }
 }
 
@@ -41,12 +49,15 @@ resource "hcloud_server" "ts_hz_db" {
   server_type = "cx33"
   location    = var.location
   image       = "ubuntu-24.04" # placeholder — NixOS via bootstrap
-  ssh_keys    = [hcloud_ssh_key.timestone_ops.id]
+  # ssh_keys deliberately absent (see ts_hz_ctl).
   labels = {
     managed-by = "tofu"
     leg        = "hetzner"
     role       = "database"
     workload   = "cnpg-temporal"
+  }
+  lifecycle {
+    ignore_changes = [ssh_keys]
   }
 }
 

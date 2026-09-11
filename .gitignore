@@ -21,3 +21,7 @@ age-identity
 age.key
 *.pem
 *.key
+
+# In-repo tool binaries and operator runtime (never commit)
+.tools/
+.runtime/
