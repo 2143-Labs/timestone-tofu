@@ -173,12 +173,15 @@ locals {
     file("${path.module}/patches/private-network.yaml"),
   ]
 
-  # Control-plane-only patches: taint/LB-label deletion. CNI stays at the Talos
-  # default (flannel + kube-proxy); the cilium migration patches remain in
-  # patches/ unreferenced until Cilium is actually deployed.
+  # Control-plane-only patches: migrate CNI to Cilium (disable kube-proxy +
+  # remove flannel), API server cert SANs for tunneled kubectl, and
+  # taint/LB-label deletion. Cilium itself is deployed separately via GitOps.
   talos_controlplane_patches = concat(
     local.talos_global_patches,
     [
+      file("${path.module}/patches/cilium-kubeproxy.yaml"),
+      file("${path.module}/patches/cilium-cni.yaml"),
+      file("${path.module}/patches/api-san.yaml"),
       file("${path.module}/patches/controlplane-taint-labels.yaml"),
     ],
   )
