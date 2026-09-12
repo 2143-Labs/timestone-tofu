@@ -42,9 +42,21 @@ variable "talos_worker_count" {
 }
 
 variable "talos_cluster_endpoint" {
-  description = "Kubernetes API endpoint URL (https://<LB-or-CP-ip>:6443). Placeholder for offline validate/plan; set the real LB/CP address at apply."
+  description = "Kubernetes API endpoint URL. On the private network this is the control-plane node's private IP (https://10.26.0.10:6443). Placeholder for offline validate/plan; set the real address at apply."
   type        = string
   default     = "https://talos-api.invalid:6443"
+}
+
+variable "talos_private_subnet" {
+  description = "Hetzner private subnet CIDR for node internal IPs (nbg1=.10 control-plane anchor). Must match patches/private-network.yaml and the subnet in network.tf."
+  type        = string
+  default     = "10.26.0.0/24"
+}
+
+variable "talos_bootstrap_access" {
+  description = "When true, open office->50000/6443 on the public firewall so tofu can apply configs and bootstrap. Flip back to false after the tunnel+SSO path is verified."
+  type        = bool
+  default     = false
 }
 
 variable "talos_manage" {

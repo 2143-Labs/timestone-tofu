@@ -13,11 +13,14 @@
 locals {
   # Order is canonical: nbg1 is the bootstrap/API anchor.
   talos_locations = ["nbg1", "fsn1", "hel1"]
-  talos_peer_ips  = [for l in local.talos_locations : hcloud_primary_ip.node[l].ip_address]
 
-  # Talos API (50000) + kube API (6443) + ICMP from the office and the three
-  # retained peers; Cilium WireGuard (51871/udp) between peers only.
-  talos_admin_sources = concat([var.office_cidr], local.talos_peer_ips)
+  # Hetzner private network: one static internal IP per node, derived from its
+  # position (nbg1 = .10 control-plane anchor). The CIDR must match the
+  # validSubnets in patches/private-network.yaml.
+  talos_private_cidr = var.talos_private_subnet
+  talos_private_ips = {
+    for i, l in local.talos_locations : l => cidrhost(local.talos_private_cidr, 10 + i)
+  }
 }
 
 resource "hcloud_primary_ip" "node" {
@@ -67,12 +70,17 @@ resource "hcloud_server" "node" {
   location    = each.key
   # Boot from the pinned Talos snapshot (disk already contains Talos).
   image = imager_image.talos.image_id
-  # Protect the maintenance API from the moment the server is created.
+  # Public IPv4 is egress-only: no inbound is opened on it (see firewall).
   firewall_ids = [hcloud_firewall.talos.id]
   public_net {
     ipv4         = hcloud_primary_ip.node[each.key].id
     ipv4_enabled = true
     ipv6_enabled = false
+  }
+  # Attach to the private network; the internal IP carries all cluster traffic.
+  network {
+    network_id = hcloud_network.talos.id
+    ip         = local.talos_private_ips[each.key]
   }
   labels = {
     "managed-by"        = "tofu"
@@ -84,32 +92,37 @@ resource "hcloud_server" "node" {
 resource "hcloud_firewall" "talos" {
   name = "timestone-talos"
 
-  # Talos API
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "50000"
-    source_ips = local.talos_admin_sources
+  # Steady state: NO inbound TCP on the public interface — all cluster traffic
+  # runs over the private network and operator access is via Cloudflare tunnel
+  # + SSO only. The two bootstrap rules below exist ONLY while
+  # var.talos_bootstrap_access is true so tofu can apply configs and bootstrap
+  # the cluster from the office; flip back to false after the tunnel is live.
+
+  dynamic "rule" {
+    for_each = var.talos_bootstrap_access ? [1] : []
+    content {
+      direction  = "in"
+      protocol   = "tcp"
+      port       = "50000"
+      source_ips = [var.office_cidr]
+    }
   }
-  # Kubernetes API
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "6443"
-    source_ips = local.talos_admin_sources
+
+  dynamic "rule" {
+    for_each = var.talos_bootstrap_access ? [1] : []
+    content {
+      direction  = "in"
+      protocol   = "tcp"
+      port       = "6443"
+      source_ips = [var.office_cidr]
+    }
   }
-  # Cilium WireGuard between peers only
-  rule {
-    direction  = "in"
-    protocol   = "udp"
-    port       = "51871"
-    source_ips = local.talos_peer_ips
-  }
-  # ICMP
+
+  # ICMP from the office for diagnostics (ping only; no service surface).
   rule {
     direction  = "in"
     protocol   = "icmp"
-    source_ips = local.talos_admin_sources
+    source_ips = [var.office_cidr]
   }
 }
 
@@ -127,6 +140,7 @@ output "talos_nodes" {
     for l in local.talos_locations : l => {
       name          = hcloud_server.node[l].name
       ipv4          = hcloud_primary_ip.node[l].ip_address
+      ipv4_private  = local.talos_private_ips[l]
       primary_ip_id = hcloud_primary_ip.node[l].id
       server_id     = hcloud_server.node[l].id
     }
@@ -152,21 +166,19 @@ resource "talos_machine_secrets" "this" {
 
 locals {
   # Global patches applied to every node type: kubelet reservations
-  # (cloud-provider external) + kube-proxy disabled (Cilium replacement). No
-  # install patch: the snapshot image already contains Talos to /dev/sda.
+  # (cloud-provider external) + the private-network interface/node-IP pinning.
+  # No install patch: the snapshot image already contains Talos on /dev/sda.
   talos_global_patches = [
     file("${path.module}/patches/kubelet.yaml"),
-    file("${path.module}/patches/cilium-kubeproxy.yaml"),
+    file("${path.module}/patches/private-network.yaml"),
   ]
 
-  # Control-plane-only patches: delete KubeFlannelCNIConfig (only valid on control-plane
-  # configs) + taint/LB-label deletion. Workers lack those KubeNodeConfig keys,
-  # so the deletion patch would fail the strategic-merge "lookup" if applied
-  # globally — keep it scoped to the control-plane.
+  # Control-plane-only patches: taint/LB-label deletion. CNI stays at the Talos
+  # default (flannel + kube-proxy); the cilium migration patches remain in
+  # patches/ unreferenced until Cilium is actually deployed.
   talos_controlplane_patches = concat(
     local.talos_global_patches,
     [
-      file("${path.module}/patches/cilium-cni.yaml"),
       file("${path.module}/patches/controlplane-taint-labels.yaml"),
     ],
   )
@@ -262,5 +274,11 @@ output "talos_worker_config" {
 output "talos_kubeconfig" {
   description = "Raw kubeconfig for the Talos cluster (populated only when talos_manage = true)."
   value       = var.talos_manage ? talos_cluster_kubeconfig.this[0].kubeconfig_raw : null
+  sensitive   = true
+}
+
+output "talosconfig" {
+  description = "Raw talosconfig (Talos client config for talosctl, sensitive)."
+  value       = talos_machine_secrets.this.client_configuration
   sensitive   = true
 }

@@ -1,0 +1,16 @@
+# Hetzner private network: bring up the second NIC (eth1) via DHCP and pin the
+# kubelet node IP to the private subnet, so every node InternalIP and all
+# cluster traffic stay off the public interface. eth0 (public) keeps Talos's
+# default DHCP/mgmt behavior and remains egress-only.
+#
+# The validSubnets CIDR MUST match var.talos_private_subnet and the subnet in
+# network.tf.
+machine:
+  network:
+    interfaces:
+      - interface: eth1
+        dhcp: true
+  kubelet:
+    nodeIP:
+      validSubnets:
+        - 10.26.0.0/24
