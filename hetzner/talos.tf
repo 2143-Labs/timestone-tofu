@@ -36,13 +36,39 @@ resource "hcloud_primary_ip" "node" {
   }
 }
 
+# Golden snapshot: factory hcloud-platform disk image -> Hetzner snapshot image.
+# Must be the hcloud platform (not metal): the metal image yields providerID
+# talos://metal/... which breaks hcloud-cloud-controller-manager route creation
+# (see terraform-hcloud-talos issue #417).
+data "talos_image_factory_urls" "hcloud_amd64" {
+  talos_version = var.talos_version
+  schematic_id  = var.talos_schematic
+  platform      = "hcloud"
+  architecture  = "amd64"
+}
+
+resource "imager_image" "talos" {
+  image_url    = data.talos_image_factory_urls.hcloud_amd64.urls.disk_image
+  architecture = "x86"
+
+  labels = {
+    version = var.talos_version
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 resource "hcloud_server" "node" {
   for_each    = toset(local.talos_locations)
   name        = "ts-talos-${each.key}"
   server_type = "cx33"
   location    = each.key
-  # Ubuntu is only a pre-ISO carrier; Talos is installed from the attached ISO.
-  image = "ubuntu-24.04"
+  # Boot from the pinned Talos snapshot (disk already contains Talos).
+  image = imager_image.talos.image_id
+  # Protect the maintenance API from the moment the server is created.
+  firewall_ids = [hcloud_firewall.talos.id]
   public_net {
     ipv4         = hcloud_primary_ip.node[each.key].id
     ipv4_enabled = true
@@ -87,10 +113,13 @@ resource "hcloud_firewall" "talos" {
   }
 }
 
-resource "hcloud_firewall_attachment" "talos" {
-  for_each    = toset(local.talos_locations)
-  firewall_id = hcloud_firewall.talos.id
-  server_ids  = [hcloud_server.node[each.key].id]
+# Attachment resources own the entire firewall's server set. Forget the old
+# per-node owners without detaching anything; each server now owns its binding.
+removed {
+  from = hcloud_firewall_attachment.talos
+  lifecycle {
+    destroy = false
+  }
 }
 
 output "talos_nodes" {
@@ -122,33 +151,13 @@ resource "talos_machine_secrets" "this" {
 }
 
 locals {
-  # Install disk/image patch. The factory installer carries the
-  # siderolabs/qemu-guest-agent extension (Hetzner QEMU/KVM graceful shutdown).
-  # The image is re-resolved at bootstrap (talos/versions.json talos_installer —
-  # "re-resolve required at bootstrap; stop on mismatch").
-  talos_install_patch = yamlencode({
-    apiVersion = "v1alpha1"
-    kind       = "UnattendedInstallConfig"
-    installer = {
-      image = var.talos_installer_image
-    }
-    provisioning = {
-      diskSelector = {
-        match = "disk.dev_path == \"${var.talos_install_disk}\""
-      }
-      wipe = false
-    }
-  })
-
-  # Global patches applied to every node type: install + kubelet reservations
-  # (cloud-provider external) + KubeSpan.
-  talos_global_patches = concat(
-    [local.talos_install_patch],
-    [
-      file("${path.module}/patches/kubelet.yaml"),
-      file("${path.module}/patches/kubespan.yaml"),
-    ],
-  )
+  # Global patches applied to every node type: kubelet reservations
+  # (cloud-provider external) + KubeSpan. No install patch: the snapshot image
+  # already contains Talos installed to /dev/sda.
+  talos_global_patches = [
+    file("${path.module}/patches/kubelet.yaml"),
+    file("${path.module}/patches/kubespan.yaml"),
+  ]
 
   # Control-plane-only patches: flannel CNI (only valid on control-plane
   # configs) + taint/LB-label deletion. Workers lack those KubeNodeConfig keys,

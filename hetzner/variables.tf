@@ -34,16 +34,10 @@ variable "talos_kubernetes_version" {
   default     = "1.35.8"
 }
 
-variable "talos_install_disk" {
-  description = "Block device the Talos installer writes to (CX33 primary NVMe/SSD)."
+variable "talos_schematic" {
+  description = "Talos Image Factory schematic ID for the node disk image (talos/versions.json talos_installer.schematic). Content-addressed; includes siderolabs/qemu-guest-agent."
   type        = string
-  default     = "/dev/sda"
-}
-
-variable "talos_installer_image" {
-  description = "Factory installer image for machine.install.image (talos/versions.json talos_installer.image). Re-resolve at bootstrap; stop on mismatch."
-  type        = string
-  default     = "factory.talos.dev/metal-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.14.0"
+  default     = "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 }
 
 variable "talos_worker_count" {

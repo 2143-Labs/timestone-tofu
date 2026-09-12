@@ -11,6 +11,10 @@ terraform {
       source  = "siderolabs/talos"
       version = "0.12.0-beta.0"
     }
+    imager = {
+      source  = "hcloud-talos/imager"
+      version = "~> 1.0"
+    }
   }
   # Remote state backend TBD (home SeaweedFS S3). Local-only until then.
 }
@@ -19,6 +23,8 @@ provider "hcloud" {
   # token is read from the HCLOUD_TOKEN environment variable (migration: the
   # previously-required variable/provider argument is removed).
 }
+
+provider "imager" {}
 
 removed {
   from = hcloud_ssh_key.timestone_ops
@@ -118,14 +124,18 @@ resource "hcloud_firewall" "timestone" {
   }
 }
 
+# One owner manages the complete legacy attachment set; preserve both servers.
 resource "hcloud_firewall_attachment" "timestone_ctl" {
   firewall_id = hcloud_firewall.timestone.id
-  server_ids  = [hcloud_server.ts_hz_ctl.id]
+  server_ids  = [hcloud_server.ts_hz_ctl.id, hcloud_server.ts_hz_db.id]
 }
 
-resource "hcloud_firewall_attachment" "timestone_db" {
-  firewall_id = hcloud_firewall.timestone.id
-  server_ids  = [hcloud_server.ts_hz_db.id]
+removed {
+  from = hcloud_firewall_attachment.timestone_db
+  lifecycle {
+    # The remaining owner above preserves both existing attachments.
+    destroy = false
+  }
 }
 
 output "nodes" {
