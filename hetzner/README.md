@@ -19,7 +19,7 @@ environment; `TF_VAR_office_cidr` is required.
   across nbg1/fsn1/hel1. Ubuntu 24.04 is only a pre-ISO carrier; Talos installs
   from the factory installer image.
 - `hcloud_firewall` `timestone-talos` — Talos API (50000), kube API (6443),
-  ICMP from the office + peers; KubeSpan (51820/udp) between peers.
+  ICMP from the office + peers; Cilium WireGuard (51871/udp) between peers.
 - `talos_machine_secrets` — generated on first apply, or import an existing
   talosctl `gen secrets` bundle (`tofu import talos_machine_secrets.this
   ../.runtime/dummy/secrets.yaml`) to reuse across renders.
@@ -47,8 +47,8 @@ scope because the configpatcher's `deleteForPath` does a strict map-key lookup:
 | Patch | Scope | Effect |
 |---|---|---|
 | `kubelet.yaml` | global | kubeReserved/systemReserved + `cloud-provider: external` |
-| `kubespan.yaml` | global | KubeSpan enabled, MTU 1420, no down-peer bypass |
-| `flannel.yaml` | control-plane | KubeFlannelCNIConfig backendMTU 1420 |
+| `cilium-kubeproxy.yaml` | global | disable kube-proxy (Cilium kube-proxy replacement) |
+| `cilium-cni.yaml` | control-plane | delete `KubeFlannelCNIConfig` document |
 | `controlplane-taint-labels.yaml` | control-plane | delete `exclude-from-external-load-balancers` label + control-plane taint |
 | (inline `yamlencode`) | global | `UnattendedInstallConfig` — install disk + factory installer image |
 

@@ -16,7 +16,7 @@ locals {
   talos_peer_ips  = [for l in local.talos_locations : hcloud_primary_ip.node[l].ip_address]
 
   # Talos API (50000) + kube API (6443) + ICMP from the office and the three
-  # retained peers; KubeSpan (51820/udp) between peers only.
+  # retained peers; Cilium WireGuard (51871/udp) between peers only.
   talos_admin_sources = concat([var.office_cidr], local.talos_peer_ips)
 }
 
@@ -98,11 +98,11 @@ resource "hcloud_firewall" "talos" {
     port       = "6443"
     source_ips = local.talos_admin_sources
   }
-  # KubeSpan (WireGuard) between peers only
+  # Cilium WireGuard between peers only
   rule {
     direction  = "in"
     protocol   = "udp"
-    port       = "51820"
+    port       = "51871"
     source_ips = local.talos_peer_ips
   }
   # ICMP
@@ -152,21 +152,21 @@ resource "talos_machine_secrets" "this" {
 
 locals {
   # Global patches applied to every node type: kubelet reservations
-  # (cloud-provider external) + KubeSpan. No install patch: the snapshot image
-  # already contains Talos installed to /dev/sda.
+  # (cloud-provider external) + kube-proxy disabled (Cilium replacement). No
+  # install patch: the snapshot image already contains Talos to /dev/sda.
   talos_global_patches = [
     file("${path.module}/patches/kubelet.yaml"),
-    file("${path.module}/patches/kubespan.yaml"),
+    file("${path.module}/patches/cilium-kubeproxy.yaml"),
   ]
 
-  # Control-plane-only patches: flannel CNI (only valid on control-plane
+  # Control-plane-only patches: delete KubeFlannelCNIConfig (only valid on control-plane
   # configs) + taint/LB-label deletion. Workers lack those KubeNodeConfig keys,
   # so the deletion patch would fail the strategic-merge "lookup" if applied
   # globally — keep it scoped to the control-plane.
   talos_controlplane_patches = concat(
     local.talos_global_patches,
     [
-      file("${path.module}/patches/flannel.yaml"),
+      file("${path.module}/patches/cilium-cni.yaml"),
       file("${path.module}/patches/controlplane-taint-labels.yaml"),
     ],
   )
