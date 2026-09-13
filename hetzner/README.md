@@ -47,7 +47,7 @@ scope because the configpatcher's `deleteForPath` does a strict map-key lookup:
 | Patch | Scope | Effect |
 |---|---|---|
 | `kubelet.yaml` | global | kubeReserved/systemReserved + `cloud-provider: external` |
-| `cilium-kubeproxy.yaml` | global | disable kube-proxy (Cilium kube-proxy replacement) |
+| `cilium-kubeproxy.yaml` | control-plane | disable kube-proxy (Cilium kube-proxy replacement) |
 | `cilium-cni.yaml` | control-plane | delete `KubeFlannelCNIConfig` document |
 | `controlplane-taint-labels.yaml` | control-plane | delete `exclude-from-external-load-balancers` label + control-plane taint |
 | (inline `yamlencode`) | global | `UnattendedInstallConfig` — install disk + factory installer image |
