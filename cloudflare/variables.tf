@@ -24,9 +24,9 @@ variable "tunnel_secret" {
 }
 
 variable "access_emails" {
-  description = "Emails allowed through Cloudflare Access to the PRIVATE layer (*.int.hero-rehab.xyz)"
+  description = "Emails allowed through Cloudflare Access: the gated Kubernetes API (k8s.hero-rehab.xyz) and, when enabled, the private layer (*.int.hero-rehab.xyz)."
   type        = list(string)
-  default     = ["john@john2143.com"]
+  default     = ["timestone@2143.me"]
 }
 
 variable "enable_internal_access" {
