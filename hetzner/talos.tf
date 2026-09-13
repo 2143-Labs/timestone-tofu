@@ -183,7 +183,16 @@ locals {
     [
       file("${path.module}/patches/cilium-kubeproxy.yaml"),
       file("${path.module}/patches/cilium-cni.yaml"),
-      file("${path.module}/patches/api-san.yaml"),
+      # patches/api-san.yaml is deliberately NOT applied here. Talos always
+      # emits cluster.apiServer in the generated config, and the golden snapshot
+      # image carries its own copy, so re-setting it fails with
+      #   ".cluster.apiServer is already set in v1alpha1 config"
+      # Talos still auto-injects the cluster endpoint and the node's own
+      # addresses as SANs, which is what the bootstrap path (kubectl over the
+      # public IP) needs. The extra SANs — 127.0.0.1 / localhost for
+      # `cloudflared access tcp` — require either an image built without a baked
+      # machine config, or a `talosctl patch` against the live node. Re-add the
+      # file here once the image is rebuilt.
       file("${path.module}/patches/controlplane-taint-labels.yaml"),
     ],
   )

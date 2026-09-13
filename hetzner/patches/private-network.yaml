@@ -1,17 +1,35 @@
 # Node-level machine config: the Hetzner private network NIC, and every kubelet
 # setting.
 #
-# ONE patch owns `machine.kubelet`, deliberately. Talos's strategic merger
-# refuses a second writer of the same subtree:
+# ---------------------------------------------------------------------------
+# KNOWN BLOCKER — the golden image carries a baked machine config
+# ---------------------------------------------------------------------------
+# Applying this patch fails against servers built from the current
+# `imager_image.talos` snapshot:
 #   ".machine.kubelet.nodeIP is already set in v1alpha1 config"
 #   "kubelet config is already set in v1alpha1 config (.machine.kubelet)"
-# The kubelet settings were previously split across a `KubeletConfig` document
-# patch (extraArgs/config) and this tree patch (nodeIP) — but `nodeIP` exists
-# only in the machine tree, so the two could not be merged into the document and
-# the pair could never coalesce. They live together here instead.
+# The error is identical whether machine.kubelet is written by one patch or two,
+# which proves it is not a patch-composition problem: the node ALREADY has
+# machine.kubelet set, because the snapshot image was taken from a
+# previously-provisioned node and carries that node's /system/state config.
+# Talos therefore refuses to overwrite those fields.
 #
-# `extraConfig` is where the upstream KubeletConfiguration document goes in tree
-# form; systemReserved/kubeReserved are KubeletConfiguration fields.
+# Consequence: this file (and patches/api-san.yaml, for the same reason on
+# cluster.apiServer) cannot be applied until the image is rebuilt WITHOUT a
+# baked machine config, or the nodes are reset before configuring. Until then,
+# nodes come up on the image's stale config: nodeIP happens to be right
+# (10.26.0.0/24), but `extraArgs.cloud-provider: external` and the reservations
+# below are NOT applied — which is why nodes never get providerID, the hcloud
+# CCM never initializes them, and no pod-CIDR routes are programmed.
+# ---------------------------------------------------------------------------
+#
+# ONE patch owns `machine.kubelet`, deliberately: Talos's strategic merger
+# refuses a second writer of the same subtree. `nodeIP` exists only in the
+# machine tree (the KubeletConfig document rejects it as an unknown key), so the
+# kubelet settings could not live in a separate document patch.
+#
+# `extraConfig` is where the upstream KubeletConfiguration goes in tree form;
+# systemReserved/kubeReserved are KubeletConfiguration fields.
 machine:
   network:
     interfaces:
@@ -26,7 +44,8 @@ machine:
       validSubnets:
         - 10.26.0.0/24
     extraArgs:
-      # The hcloud CCM owns node lifecycle; kubelet must not try to.
+      # The hcloud CCM owns node lifecycle; kubelet must not try to. Without
+      # this the node is never marked uninitialized for the CCM to pick up.
       cloud-provider: external
     extraConfig:
       systemReserved:
