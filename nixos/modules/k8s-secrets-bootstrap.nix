@@ -50,10 +50,12 @@
         fi
       }
 
-      # Temporal DB password — key MUST be `password`: CNPG managed.roles
-      # passwordSecret defaults to that key AND the Temporal chart datastores
-      # set secretKey: password (source-verified against the home values).
+      # Temporal DB password. CNPG 1.30's managed.roles[].passwordSecret
+      # requires BOTH keys and the value of `username` must equal the role
+      # name; a password-only Secret cannot survive a restore. This is the
+      # same defect that broke spire-db-password.
       ensure_secret temporal-db-password \
+        --from-literal=username=temporal \
         --from-literal=password="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
 
       # cloudflared tunnel credentials — the <uuid>.json from Stage 1

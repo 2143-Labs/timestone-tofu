@@ -1,22 +1,28 @@
 # Bootstrap — Stage 1→5 runbook (operator checklist)
 
-Bring Timestone Phase 1 (Hetzner-only) from zero to
-`https://whoami.hero-rehab.xyz` + `https://temporal.hero-rehab.xyz` returning 200.
+Bring the Timestone Talos cluster (Hetzner, EU) from zero to a GitOps-managed
+cluster: `https://whoami.hero-rehab.xyz` plus a working SPIRE identity plane.
 
-The plan this implements: `timestone-phase1-hetzner-plan.md` (approved). Stages 0
-(commit) and 1 (zone/push) are one-time; 2–5 are per-bring-up. Rollback is clean
-at every stage (see plan §Assumptions).
+Stage 1 is one-time. Stages 2–5 are per-bring-up. Talos nodes are immutable, so
+there is no SSH and no NixOS install: nodes are created by OpenTofu from a
+Talos Image Factory image, and everything above the OS is applied by
+`bin/bootstrap-cluster.sh` and then by ArgoCD.
 
 ## Prerequisites (all must hold — else STOP and report which one)
 
-- [ ] `gh auth status` works (org 2143-Labs)
-- [ ] Hetzner project `timestone` exists; project-scoped R/W token ready
-      (export `HCLOUD_TOKEN`)
-- [ ] Office public IPv4 known (this machine's egress IP) → `TF_VAR_office_cidr=<ip>/32`
-- [ ] Cloudflare API token (Zone:DNS:Edit + Zone:Zone:Edit) + account id; `hero-rehab.xyz`
-      at the registrar (NS edits manual)
-- [ ] (optional) Home SeaweedFS S3 creds for `timestone-backups` → skip backups
-      this phase if absent (documented omission)
+- [ ] `HCLOUD_TOKEN` exported (Hetzner project-scoped R/W token)
+- [ ] Office public IPv4 known (this machine's egress IP; find it with
+      `curl -4 ifconfig.me`) → `TF_VAR_office_cidr=<ip>/32`
+- [ ] `TF_VAR_talos_manage=true` (without it Tofu builds nodes but creates no
+      cluster and no kubeconfig)
+- [ ] `TF_VAR_talos_cluster_endpoint=https://k8s.hero-rehab.xyz:6443`
+- [ ] `CLOUDFLARE_TUNNEL_TOKEN` and `CLOUDFLARE_API_TOKEN` exported
+- [ ] `kubectl`, `curl`, `python3` on PATH, and `helm`
+      (`nix shell nixpkgs#kubernetes-helm`)
+- [ ] Vendored tools present: `.tools/tofu`, `.tools/talosctl`
+
+Credentials are read from the environment ONLY. No script in this repo reads a
+credentials file, and the operator kubeconfig is never echoed.
 
 ## Stage 1 — Cloudflare zone + tunnel (API, no browser); GitHub push PAUSED
 
@@ -29,100 +35,139 @@ tofu -chdir=cloudflare init && tofu -chdir=cloudflare apply
 tofu -chdir=cloudflare output zone_ns          # → registrar NS records (manual, browser)
 # re-apply until the zone is Active; then:
 tofu -chdir=cloudflare output tunnel_id        # → fill <TUNNEL_ID> in timestone-argo
-                                               #   base/cloudflared/configmap.yaml + creds JSON
+                                               #   base/cloudflared/configmap.yaml
 ```
 
-The GitHub push (create 2143-Labs/timestone-{argo,tofu} --public --push) is
-**paused pending operator review** — repos stay local-only until told otherwise.
+Stage 1 also creates the Cloudflare **Zero Trust Access application** for
+`k8s.hero-rehab.xyz`. That application must exist **before** any cloudflared
+ingress rule names that hostname: DNS carries a proxied wildcard `*` CNAME to
+the tunnel, so an ingress rule with no Access application in front of it would
+publish an unauthenticated Kubernetes API to the internet.
 
-## Stage 2 — Hetzner nodes
+## Stage 2 — Private network + Talos nodes
+
+The private network `timestone-net` (`10.26.0.0/16`, subnet `10.26.0.0/24`) is
+created first, and the node `network` block references it so `eth1` exists from
+first boot. There is no live renumbering step.
 
 ```sh
-HCLOUD_TOKEN=… TF_VAR_office_cidr=<office-ip>/32 TF_VAR_ssh_public_key=<key.pub> \
-  tofu -chdir=hetzner init && tofu -chdir=hetzner apply
-ssh -o StrictHostKeyChecking=accept-new root@<ip> true   # both output IPs
-# Fill node IPs into ../nixos/hosts/*.nix (ownIp/peerIp/serverAddr) NOW.
+cd hetzner
+../.tools/tofu init
+../.tools/tofu apply                     # network + 3 nodes (1 control plane, 2 workers)
+../.tools/tofu output talos_nodes        # node names + public IPs
 ```
 
-## Stage 3 — age prep → NixOS install → k3s + ArgoCD
+Private addresses are fixed by `local.talos_private_ips`: nbg1 `.10`
+(control plane anchor), fsn1 `.11`, hel1 `.12`.
 
-### 3.1 age secrets (office; keeps the shared node identity)
+**Open the bootstrap firewall gate for the duration of Stages 3–4:**
 
 ```sh
-# shared age identity for BOTH nodes (private pushed at install):
-age-keygen -o age-identity
-age-keygen -y age-identity          # → paste into nixos/secrets/secrets.nix
-                                    #   (replace age1PLACEHOLDER… for nodeAgeIdentity)
-mkdir -p nixos/.nixos-anywhere-extra/etc/ssh
-install -m 600 age-identity nixos/.nixos-anywhere-extra/etc/ssh/age-identity
-
-# tunnel credentials JSON ← tofu outputs + the env file (never a plaintext file):
-python3 - <<'EOF'
-import json, os
-creds = {
-  "AccountTag": os.environ["TF_VAR_account_id"],
-  "TunnelID": os.environ["TUNNEL_ID"],          # tofu -chdir=cloudflare output tunnel_id
-  "TunnelSecret": os.environ["TUNNEL_SECRET"],  # same value given to the tunnel resource
-}
-open("/tmp/timestone-tunnel.json", "w").write(json.dumps(creds))
-EOF
-cd nixos && nix develop
-# encrypt k3s token + tunnel creds for office + nodeAgeIdentity:
-echo -n "<k3s-token: python3 -c 'import secrets;print(secrets.token_urlsafe(32))'>" > /tmp/k3s-token
-agenix -e secrets/timestone/k3s-token.age          # paste token, save → re-encrypts
-agenix -e secrets/timestone/cloudflared-tunnel.age # paste JSON from /tmp/timestone-tunnel.json
-rm /tmp/k3s-token /tmp/timestone-tunnel.json
-# age files ARE committed (ciphertext only) — required for the remote-flake
-# auto-update + one-shot bootstraps to re-evaluate from the public repo.
-# Fill <TUNNEL_ID> in ../timestone-argo/base/cloudflared/configmap.yaml too.
+export TF_VAR_talos_bootstrap_access=true
+../.tools/tofu apply
 ```
 
-### 3.2 install (server FIRST)
+That opens 6443 and 50000 from `TF_VAR_office_cidr` alone. It is required
+because the office cannot route `10.26.0.0/24` and the tunnel is deployed by
+Argo much later, in Stage 4.
+
+## Stage 3 — Bootstrap the cluster
+
+Produce the kubeconfig, then run the bootstrap script.
 
 ```sh
-cd nixos && nix develop        # provides nixos-anywhere (devShell)
-../bin/install-nixos.sh ts-hz-ctl <ctl-ip>   # then:
-../bin/install-nixos.sh ts-hz-db  <db-ip>
-```
-
-### 3.3 verify (on ts-hz-ctl)
-
-k3s active (`systemctl status k3s`); `kubectl get nodes` shows **both Ready**
-(ctl + db); `argocd-bootstrap` + `k8s-secrets-bootstrap` exit 0;
-`argocd-server` Running; Secrets `temporal-db-password` +
-`cloudflared-credentials` exist in ns default. Then COMMIT + push the age files
-same day (the 04:10 auto-update timer needs them on the remote branch to
-evaluate).
-
-### 3.4 office kubeconfig (Stages 4–5 run from here, not the node)
-
-```sh
-ssh root@<ctl-ip> 'sed "s/127.0.0.1/<ctl-ip>/" /etc/rancher/k3s/k3s.yaml' \
-  > ~/.kube/timestone.yaml
+cd ..
+( cd hetzner && ../.tools/tofu output -raw talos_kubeconfig ) > ~/.kube/timestone.yaml
 chmod 600 ~/.kube/timestone.yaml
-export KUBECONFIG=~/.kube/timestone.yaml    # context `default`
-kubectl get nodes                             # both Ready, from the office
+
+export KUBECONFIG=~/.kube/timestone.yaml
+bin/bootstrap-cluster.sh
 ```
 
-## Stage 4 — ArgoCD wave sync
+What the script does, in order:
+
+1. Writes a **copy** of the kubeconfig under `.runtime/` with `server:` pointed
+   at the nbg1 public IP for the bootstrap run — your steady-state kubeconfig is
+   left untouched.
+2. Waits for the API server.
+3. **Installs Cilium before ArgoCD.** `hetzner/patches/cilium-cni.yaml` deletes
+   Talos's built-in flannel manifest, so a new node has no CNI and every pod
+   sandbox fails — ArgoCD included. An ArgoCD that cannot run can never sync the
+   Cilium Application that would give it networking, so Cilium is applied here,
+   using the **same values as the GitOps Application** (fetched from
+   `argocd/wave-0/cilium.yaml`, so the datapath has one source of truth).
+4. Installs ArgoCD pinned to the version the cluster runs, sets a non-empty
+   `argocd-redis` password, and applies `argocd-cm`.
+5. Creates the four bootstrap Secrets (below), each only if absent.
+6. Applies the root Application, handing everything else to GitOps.
+
+Cilium's chart ships no CRDs on purpose (`operator.skipCRDCreation` defaults to
+false) — `cilium-operator` creates them at runtime, so nothing is preloaded.
+
+## Stage 4 — Watch the ArgoCD waves
 
 ```sh
-kubectl -n argocd get application root        # → Synced/Healthy
-kubectl get applications -n argocd -w         # all Synced+Healthy
-kubectl -n default logs deploy/cloudflared    # "Registered tunnel connection" ×2
-kubectl -n default get svc                    # timestone-rw + temporal services
+kubectl -n argocd get applications -w
+kubectl -n default logs deploy/cloudflared     # "Registered tunnel connection" ×2
 ```
 
-## Stage 5 — End-to-end verification
+Expected non-green Applications until the owner-run OpenBao step (Phase 8.4) is
+applied:
 
-External checks from the office machine (NOT node-local): dig/curl the two
-hostnames, Gateway `Programmed=True`, 404 on unknown hostnames, in-cluster
-`select 1`, ArgoCD UI healthy, rolling `nixos-rebuild switch` on both nodes,
-`systemctl list-timers` shows the daily update.
+| Application | State | Why |
+|---|---|---|
+| `openbao-secret-sync` | `Progressing` | needs a JWT-SVID from SPIRE; logs login failures by design |
+| `hello-openbao` | `Degraded` | consumes Secret `openbao-steam`, which only the sync loop writes |
+
+These are the documented exception to "everything Synced+Healthy"; do not treat
+them as a failed bring-up.
+
+## Stage 5 — Steady state and end-to-end verification
+
+Reach the API through the Access-gated tunnel:
+
+```sh
+cloudflared access tcp --hostname k8s.hero-rehab.xyz --url 127.0.0.1:6443 &
+kubectl --context admin@timestone get nodes     # kubeconfig server: https://127.0.0.1:6443
+```
+
+The first invocation opens a browser for the Access SSO login. `127.0.0.1` is
+already a certificate SAN, so nothing needs reissuing.
+
+Once that path is verified, **close the firewall gate** — this is the step that
+makes the public IPs egress-only:
+
+```sh
+cd hetzner
+export TF_VAR_talos_bootstrap_access=false
+../.tools/tofu apply
+```
+
+Then verify from the office machine (not node-local): `eth1` carries
+`10.26.0.1{0,1,2}/24` and `kubectl get nodes -o wide` shows those as
+`INTERNAL-IP`; `kubectl logs`/`exec` work for pods on *other* nodes; the
+cloudflared hostnames resolve; unknown hostnames return 404; and
+`nc -z -w3 <public-ip> 6443` fails.
 
 ## Secrets at bootstrap
 
-Secrets are injected on the host by the agenix oneshot (`k8s-secrets-bootstrap`,
-59s pattern) — never present as plaintext in these repos. `k8s-secrets-bootstrap`
-is idempotent: it never rotates an existing Secret (DB password stability under
-CNPG/Temporal).
+Created by `bin/bootstrap-cluster.sh`, only if absent — a re-run never rotates a
+live password. They are deliberately **not** in the GitOps repo, because
+ArgoCD's `selfHeal` would revert an injected value.
+
+| Secret | Namespace | Keys | Consumer |
+|---|---|---|---|
+| `hcloud` | `kube-system` | `token` | hcloud-ccm Deployment + hcloud-csi |
+| `cloudflared-tunnel-token` | `default` | `token` | `base/cloudflared/deployment.yaml` |
+| `temporal-db-password` | `default` | `username`, `password` | `base/cnpg/cluster.yaml` |
+| `cloudflare-api-token` | `cert-manager` | `token` | the timestone DNS-01 ClusterIssuer |
+
+`hcloud` lives in `kube-system` because both consumers are Deployments there and
+neither sets a namespace on its `secretKeyRef`, so the name resolves locally.
+
+`temporal-db-password` requires **both** keys: CNPG 1.30's
+`managed.roles[].passwordSecret` needs `username` as well as `password`, and the
+username must equal the role name (`temporal`). A password-only Secret cannot
+survive a restore. The retired k3s path in
+`nixos/modules/k8s-secrets-bootstrap.nix` carries the same fix so the two paths
+cannot diverge.
