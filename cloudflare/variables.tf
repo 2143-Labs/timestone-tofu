@@ -1,7 +1,7 @@
 # Cloudflare edge — hero-rehab.xyz apex zone + named tunnel + wildcard CNAME
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API token (Zone:DNS:Edit, Zone:Zone:Edit, Account:Cloudflare Tunnel:Edit). Never in files."
+  description = "Cloudflare API token (Zone:DNS:Edit, Zone:Zone:Edit, Account:Cloudflare Tunnel:Edit, Account:Access: Apps and Policies:Edit). Never in files."
   type        = string
   sensitive   = true
 }

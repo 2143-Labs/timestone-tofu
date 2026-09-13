@@ -62,6 +62,24 @@ resource "cloudflare_dns_record" "wildcard_tunnel" {
 # WARP-only hardening (optional, later): add a device-posture requirement
 # (`require = [{ device_posture = [<warp posture rule id>] }]`) so access
 # requires an enrolled WARP client, not just an authenticated identity.
+# The Kubernetes API is routed through the named tunnel only after this
+# application exists. Keep this unconditional: unlike browser-facing internal
+# services, operator API access is part of the cluster's steady state.
+resource "cloudflare_zero_trust_access_application" "k8s_api" {
+  account_id       = var.account_id
+  name             = "Timestone Kubernetes API (k8s.hero-rehab.xyz)"
+  domain           = "k8s.hero-rehab.xyz"
+  type             = "self_hosted"
+  session_duration = "24h"
+
+  policies = [{
+    name       = "timestone-operators"
+    decision   = "allow"
+    precedence = 1
+    include    = [for e in var.access_emails : { email = { email = e } }]
+  }]
+}
+
 resource "cloudflare_zero_trust_access_application" "internal" {
   # Disabled by default: internal services are fully internal (ClusterIP only,
   # no tunnel ingress). Flip `enable_internal_access` to true (and add the
