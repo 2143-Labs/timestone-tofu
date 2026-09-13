@@ -168,8 +168,10 @@ locals {
   # Global patches applied to every node type: kubelet reservations
   # (cloud-provider external) + the private-network interface/node-IP pinning.
   # No install patch: the snapshot image already contains Talos on /dev/sda.
+  # A single patch owns `machine.kubelet` (see patches/private-network.yaml).
+  # Splitting kubelet settings across two patches makes the strategic merger
+  # fail with ".machine.kubelet ... is already set in v1alpha1 config".
   talos_global_patches = [
-    file("${path.module}/patches/kubelet.yaml"),
     file("${path.module}/patches/private-network.yaml"),
   ]
 

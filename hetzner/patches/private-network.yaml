@@ -1,16 +1,37 @@
-# Hetzner private network: bring up the second NIC (eth1) via DHCP and pin the
-# kubelet node IP to the private subnet, so every node InternalIP and all
-# cluster traffic stay off the public interface. eth0 (public) keeps Talos's
-# default DHCP/mgmt behavior and remains egress-only.
+# Node-level machine config: the Hetzner private network NIC, and every kubelet
+# setting.
 #
-# The validSubnets CIDR MUST match var.talos_private_subnet and the subnet in
-# network.tf.
+# ONE patch owns `machine.kubelet`, deliberately. Talos's strategic merger
+# refuses a second writer of the same subtree:
+#   ".machine.kubelet.nodeIP is already set in v1alpha1 config"
+#   "kubelet config is already set in v1alpha1 config (.machine.kubelet)"
+# The kubelet settings were previously split across a `KubeletConfig` document
+# patch (extraArgs/config) and this tree patch (nodeIP) — but `nodeIP` exists
+# only in the machine tree, so the two could not be merged into the document and
+# the pair could never coalesce. They live together here instead.
+#
+# `extraConfig` is where the upstream KubeletConfiguration document goes in tree
+# form; systemReserved/kubeReserved are KubeletConfiguration fields.
 machine:
   network:
     interfaces:
+      # eth0 (public) keeps Talos's default DHCP/mgmt behavior and stays
+      # egress-only. eth1 is the private network, so every node InternalIP and
+      # all cluster traffic stay off the public interface.
       - interface: eth1
         dhcp: true
   kubelet:
     nodeIP:
+      # MUST match var.talos_private_subnet and the subnet in network.tf.
       validSubnets:
         - 10.26.0.0/24
+    extraArgs:
+      # The hcloud CCM owns node lifecycle; kubelet must not try to.
+      cloud-provider: external
+    extraConfig:
+      systemReserved:
+        cpu: 100m
+        memory: 256Mi
+      kubeReserved:
+        cpu: 150m
+        memory: 512Mi
