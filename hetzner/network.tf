@@ -52,11 +52,11 @@ resource "hcloud_load_balancer_network" "talos_api" {
 }
 
 resource "hcloud_load_balancer_target" "talos_api" {
-  for_each = hcloud_server.node
+  for_each = toset(local.talos_locations)
 
   type             = "server"
   load_balancer_id = hcloud_load_balancer.talos_api.id
-  server_id        = each.value.id
+  server_id        = hcloud_server.node[each.key].id
   use_private_ip   = true
 
   depends_on = [hcloud_load_balancer_network.talos_api]
