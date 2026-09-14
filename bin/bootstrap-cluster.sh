@@ -118,6 +118,30 @@ helm template cilium cilium \
 log "Waiting for nodes to become Ready (up to 300s)"
 kubectl wait --for=condition=Ready nodes --all --timeout=300s
 
+# With cloud-provider=external every node starts tainted
+# node.cloudprovider.kubernetes.io/uninitialized. Cilium tolerates it, but
+# upstream ArgoCD does not. Start the CCM from the same GitOps manifests before
+# installing ArgoCD so it can assign provider IDs and remove that taint.
+log "Initializing nodes with hcloud-cloud-controller-manager"
+kubectl create secret generic hcloud -n kube-system \
+  --from-literal=token="$HCLOUD_TOKEN" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+for manifest in serviceaccount clusterrole clusterrolebinding deployment; do
+  curl -fsSL "$GITOPS_RAW/base/hcloud-ccm/${manifest}.yaml" \
+    | kubectl apply --server-side --force-conflicts -f - >/dev/null
+done
+kubectl wait --for=condition=available deployment/hcloud-cloud-controller-manager \
+  -n kube-system --timeout=180s
+for _ in $(seq 1 60); do
+  if ! kubectl get nodes -o jsonpath='{range .items[*]}{.spec.taints[*].key}{"\n"}{end}' \
+      | grep -q '^node.cloudprovider.kubernetes.io/uninitialized$'; then
+    break
+  fi
+  sleep 2
+done
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.providerID}{"\n"}{end}' \
+  | grep -q 'hcloud://' || die "hcloud CCM did not initialize the nodes"
+
 # --- 3. ArgoCD ------------------------------------------------------------
 if kubectl -n argocd get deployment argocd-server >/dev/null 2>&1; then
   log "ArgoCD is already installed — skipping"

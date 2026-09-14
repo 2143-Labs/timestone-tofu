@@ -54,8 +54,11 @@ preflight() {
   "$KUBECTL" --context "$KUBE_CONTEXT" get --raw=/readyz >/dev/null
   "$KUBECTL" --context "$KUBE_CONTEXT" wait --for=condition=Ready nodes --all --timeout=60s >/dev/null
   "$TALOSCTL" "${TALOS_ARGS[@]}" --nodes "${CONTROL_PLANES[0]}" etcd members
-  "$TALOSCTL" "${TALOS_ARGS[@]}" --nodes "${CONTROL_PLANES[0]},${CONTROL_PLANES[1]},${CONTROL_PLANES[2]}" etcd status
-  "$TALOSCTL" "${TALOS_ARGS[@]}" --nodes "${CONTROL_PLANES[0]},${CONTROL_PLANES[1]},${CONTROL_PLANES[2]}" etcd alarm list
+  local node
+  for node in "${CONTROL_PLANES[@]}"; do
+    "$TALOSCTL" "${TALOS_ARGS[@]}" --nodes "$node" etcd status
+    "$TALOSCTL" "${TALOS_ARGS[@]}" --nodes "$node" etcd alarm list
+  done
 }
 
 cmd="${1:-}"

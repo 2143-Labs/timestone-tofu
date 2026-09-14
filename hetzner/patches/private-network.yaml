@@ -6,3 +6,14 @@ kind: KubeNodeConfig
 nodeIP:
   validSubnets:
     - 10.26.0.0/24
+---
+apiVersion: v1alpha1
+kind: LinkConfig
+name: eth1
+up: true
+---
+apiVersion: v1alpha1
+kind: DHCPv4Config
+name: eth1
+clientIdentifier: mac
+ignoreHostname: true
