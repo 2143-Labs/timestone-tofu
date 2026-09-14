@@ -13,9 +13,9 @@ Talos Image Factory image, and everything above the OS is applied by
 - [ ] `HCLOUD_TOKEN` exported (Hetzner project-scoped R/W token)
 - [ ] Office public IPv4 known (this machine's egress IP; find it with
       `curl -4 ifconfig.me`) → `TF_VAR_office_cidr=<ip>/32`
-- [ ] `TF_VAR_talos_manage=true` (without it Tofu builds nodes but creates no
-      cluster and no kubeconfig)
-- [ ] `TF_VAR_talos_cluster_endpoint=https://k8s.hero-rehab.xyz:6443`
+- [ ] `TF_VAR_talos_bootstrap_access=true` only for initial configuration; a
+      normal steady-state apply leaves it false
+- [ ] Private HA API endpoint is `https://10.26.0.20:6443`
 - [ ] `CLOUDFLARE_TUNNEL_TOKEN` and `CLOUDFLARE_API_TOKEN` exported
 - [ ] `kubectl`, `curl`, `python3` on PATH, and `helm`
       (`nix shell nixpkgs#kubernetes-helm`)
@@ -53,12 +53,13 @@ first boot. There is no live renumbering step.
 ```sh
 cd hetzner
 ../.tools/tofu init
-../.tools/tofu apply                     # network + 3 nodes (1 control plane, 2 workers)
-../.tools/tofu output talos_nodes        # node names + public IPs
+../.tools/tofu apply                     # network + private LB + 3 control planes
+../.tools/tofu output talos_nodes        # node names + public/private IPs
+../.tools/tofu output talos_api_endpoint # private HA endpoint (not public)
 ```
 
-Private addresses are fixed by `local.talos_private_ips`: nbg1 `.10`
-(control plane anchor), fsn1 `.11`, hel1 `.12`.
+Private addresses are fixed: nbg1 `.10`, fsn1 `.11`, hel1 `.12`; all three are
+schedulable control planes and etcd voters. The private load balancer is `.20`.
 
 **Open the bootstrap firewall gate for the duration of Stages 3–4:**
 
@@ -76,9 +77,11 @@ Argo much later, in Stage 4.
 Produce the kubeconfig, then run the bootstrap script.
 
 ```sh
-cd ..
-( cd hetzner && ../.tools/tofu output -raw talos_kubeconfig ) > ~/.kube/timestone.yaml
-chmod 600 ~/.kube/timestone.yaml
+# Export the protected Talos client config from state, then retrieve kubeconfig
+# from one configured control plane. Neither file belongs in Git.
+( cd hetzner && ../.tools/tofu output -raw talosconfig ) > ~/.talos/timestone
+chmod 600 ~/.talos/timestone
+../.tools/talosctl --talosconfig ~/.talos/timestone -n <nbg1-public-ip> kubeconfig ~/.kube/timestone.yaml
 
 export KUBECONFIG=~/.kube/timestone.yaml
 bin/bootstrap-cluster.sh
@@ -122,20 +125,17 @@ applied:
 These are the documented exception to "everything Synced+Healthy"; do not treat
 them as a failed bring-up.
 
-## Stage 5 — Steady state and end-to-end verification
+## Stage 5 — steady state and end-to-end verification
 
 Reach the API through the Access-gated tunnel:
 
 ```sh
-cloudflared access tcp --hostname k8s.hero-rehab.xyz --url 127.0.0.1:6443 &
-kubectl --context admin@timestone get nodes     # kubeconfig server: https://127.0.0.1:6443
+cloudflared access tcp --hostname k8s.hero-rehab.xyz --url 127.0.0.1:16443 &
+kubectl config set-cluster timestone --server=https://127.0.0.1:16443
+kubectl --context admin@timestone get nodes
 ```
 
-The first invocation opens a browser for the Access SSO login. `127.0.0.1` is
-already a certificate SAN, so nothing needs reissuing.
-
-Once that path is verified, **close the firewall gate** — this is the step that
-makes the public IPs egress-only:
+Once that path is verified, close the firewall gate:
 
 ```sh
 cd hetzner
@@ -143,11 +143,11 @@ export TF_VAR_talos_bootstrap_access=false
 ../.tools/tofu apply
 ```
 
-Then verify from the office machine (not node-local): `eth1` carries
-`10.26.0.1{0,1,2}/24` and `kubectl get nodes -o wide` shows those as
-`INTERNAL-IP`; `kubectl logs`/`exec` work for pods on *other* nodes; the
-cloudflared hostnames resolve; unknown hostnames return 404; and
-`nc -z -w3 <public-ip> 6443` fails.
+The private `10.26.0.20:6443` endpoint is for nodes and cloudflared, not the
+operator workstation. A normal Tofu plan/apply no longer applies machine
+configuration or bootstraps etcd. Those one-node-at-a-time lifecycle actions use
+`bin/maintain-talos.sh`; see `hetzner/README.md` for health, snapshot, upgrade,
+rollback and upkeep procedures.
 
 ## Secrets at bootstrap
 

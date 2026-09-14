@@ -1,17 +1,18 @@
-# Talos Kubernetes backend — three CX33 nodes, one each in nbg1/fsn1/hel1.
+# Talos Kubernetes backend — three schedulable control-plane nodes, one each in
+# nbg1/fsn1/hel1. Three etcd voters tolerate one node or location failure while
+# retaining quorum; every node also carries workloads because this is a compact
+# three-machine cluster.
 #
-# Added during the migration; the legacy ts-hz-ctl/ts-hz-db server + firewall
-# declarations in main.tf remain in place until retirement (step 7). Retained
-# primary IPs survive node replacement: each server references its primary IP by
-# ID, and the IP carries delete_protection + prevent_destroy.
-#
-# Nodes are spread across three EU locations (nbg1/fsn1/hel1) via the `location`
-# attribute. Hetzner removed per-datacenter pinning (2026-07-01), so the exact
-# datacenter within each location is auto-assigned by the API.
+# The hcloud Image Factory snapshot is a clean Talos disk image. Machine
+# configuration is generated here for deterministic bootstrap/recovery, but
+# network calls such as apply-config, bootstrap and OS/Kubernetes upgrades are
+# deliberately guarded operator procedures rather than ordinary tofu resources.
+# That separation keeps a normal tofu plan/apply independent of Talos API
+# reachability and prevents a one-time bootstrap call from recurring.
 
 
 locals {
-  # Order is canonical: nbg1 is the bootstrap/API anchor.
+  # Order is canonical for maintenance procedures and static private addresses.
   talos_locations = ["nbg1", "fsn1", "hel1"]
 
   # Hetzner private network: one static internal IP per node, derived from its
@@ -21,6 +22,10 @@ locals {
   talos_private_ips = {
     for i, l in local.talos_locations : l => cidrhost(local.talos_private_cidr, 10 + i)
   }
+
+  # Private L4 load balancer used by all nodes for the Kubernetes API. Keep this
+  # value aligned with hcloud_load_balancer_network.talos_api in network.tf.
+  talos_cluster_endpoint = "https://${var.talos_api_private_ip}:6443"
 }
 
 resource "hcloud_primary_ip" "node" {
@@ -38,6 +43,7 @@ resource "hcloud_primary_ip" "node" {
     prevent_destroy = true
   }
 }
+
 
 # Golden snapshot: factory hcloud-platform disk image -> Hetzner snapshot image.
 # Must be the hcloud platform (not metal): the metal image yields providerID
@@ -150,12 +156,9 @@ output "talos_nodes" {
 
 # --- Talos provider layer: config generation + cluster bootstrap ---
 #
-# The siderolabs/talos provider renders machine configs using the same
-# strategic-merge patch engine as talosctl (configpatcher.LoadPatches) and, once
-# the hcloud servers above exist, drives bootstrap/kubeconfig against the live
-# Talos API. Config generation is offline and safe to validate/plan without
-# HCLOUD_TOKEN; the apply/bootstrap/cluster/kubeconfig resources make live
-# network calls and are gated behind var.talos_manage (default false).
+# The provider renders a complete, secret-bearing machine configuration for
+# bootstrap/recovery. Tofu does not apply it automatically: day-two machine
+# changes and upgrades must use the guarded one-node-at-a-time runbook.
 
 # Talos machine secrets — generated on first apply, or import an existing
 # talosctl 'gen secrets' bundle to reuse it across renders:
@@ -165,134 +168,80 @@ resource "talos_machine_secrets" "this" {
 }
 
 locals {
-  # Global patches applied to every node type: kubelet reservations
-  # (cloud-provider external) + the private-network interface/node-IP pinning.
-  # No install patch: the snapshot image already contains Talos on /dev/sda.
-  # A single patch owns `machine.kubelet` (see patches/private-network.yaml).
-  # Splitting kubelet settings across two patches makes the strategic merger
-  # fail with ".machine.kubelet ... is already set in v1alpha1 config".
+  # Global patches applied to every node. Talos 1.14 has split the old
+  # v1alpha1 machine tree into focused documents, so node IP and kubelet
+  # settings are separate patches and never double-own the same field.
   talos_global_patches = [
     file("${path.module}/patches/private-network.yaml"),
+    file("${path.module}/patches/kubelet.yaml"),
   ]
 
-  # Control-plane-only patches: migrate CNI to Cilium (disable kube-proxy +
-  # remove flannel), API server cert SANs for tunneled kubectl, and
-  # taint/LB-label deletion. Cilium itself is deployed separately via GitOps.
+  # Every node is a schedulable control plane. The same CNI, API SAN and taint
+  # policy must therefore be present on all three nodes.
   talos_controlplane_patches = concat(
     local.talos_global_patches,
     [
       file("${path.module}/patches/cilium-kubeproxy.yaml"),
       file("${path.module}/patches/cilium-cni.yaml"),
-      # patches/api-san.yaml is deliberately NOT applied here. Talos always
-      # emits cluster.apiServer in the generated config, and the golden snapshot
-      # image carries its own copy, so re-setting it fails with
-      #   ".cluster.apiServer is already set in v1alpha1 config"
-      # Talos still auto-injects the cluster endpoint and the node's own
-      # addresses as SANs, which is what the bootstrap path (kubectl over the
-      # public IP) needs. The extra SANs — 127.0.0.1 / localhost for
-      # `cloudflared access tcp` — require either an image built without a baked
-      # machine config, or a `talosctl patch` against the live node. Re-add the
-      # file here once the image is rebuilt.
+      file("${path.module}/patches/api-san.yaml"),
       file("${path.module}/patches/controlplane-taint-labels.yaml"),
     ],
   )
-
-  # nbg1 is the control-plane anchor; the remaining locations are workers.
-  talos_worker_locations = slice(local.talos_locations, 1, 1 + var.talos_worker_count)
 }
 
-# Control-plane machine config (bootstrap/API anchor, nbg1).
+# Shared control-plane machine config for nbg1, fsn1 and hel1. Node-specific
+# hostnames and addresses come from Talos/Hetzner at runtime; every node selects
+# its 10.26.0.0/24 address through KubeNodeConfig.
 data "talos_machine_configuration" "controlplane" {
   cluster_name       = var.talos_cluster_name
   machine_type       = "controlplane"
-  cluster_endpoint   = var.talos_cluster_endpoint
+  cluster_endpoint   = local.talos_cluster_endpoint
   machine_secrets    = talos_machine_secrets.this.machine_secrets
   talos_version      = var.talos_version
   kubernetes_version = var.talos_kubernetes_version
   config_patches     = local.talos_controlplane_patches
 }
 
-# Worker machine config (fsn1 + hel1).
-data "talos_machine_configuration" "worker" {
-  cluster_name       = var.talos_cluster_name
-  machine_type       = "worker"
-  cluster_endpoint   = var.talos_cluster_endpoint
-  machine_secrets    = talos_machine_secrets.this.machine_secrets
-  talos_version      = var.talos_version
-  kubernetes_version = var.talos_kubernetes_version
-  config_patches     = local.talos_global_patches
-}
-
-# --- Live-cluster management (gated behind var.talos_manage) ---
-#
-# These make network calls to the Talos nodes; enable only at apply with a
-# reachable cluster + HCLOUD_TOKEN. With talos_manage = false they plan to 0.
-
-resource "talos_machine_configuration_apply" "controlplane" {
-  count = var.talos_manage ? 1 : 0
-
-  node                        = hcloud_primary_ip.node["nbg1"].ip_address
-  client_configuration        = talos_machine_secrets.this.client_configuration
-  machine_configuration_input = data.talos_machine_configuration.controlplane.machine_configuration
-}
-
-resource "talos_machine_configuration_apply" "worker" {
-  for_each = var.talos_manage ? toset(local.talos_worker_locations) : toset([])
-
-  node                        = hcloud_primary_ip.node[each.key].ip_address
-  client_configuration        = talos_machine_secrets.this.client_configuration
-  machine_configuration_input = data.talos_machine_configuration.worker.machine_configuration
-}
-
-resource "talos_machine_bootstrap" "controlplane" {
-  count = var.talos_manage ? 1 : 0
-
-  node                 = hcloud_primary_ip.node["nbg1"].ip_address
+data "talos_client_configuration" "this" {
+  cluster_name         = var.talos_cluster_name
   client_configuration = talos_machine_secrets.this.client_configuration
-
-  depends_on = [talos_machine_configuration_apply.controlplane]
+  endpoints            = values(local.talos_private_ips)
+  nodes                = values(local.talos_private_ips)
 }
 
-resource "talos_cluster" "this" {
-  count = var.talos_manage ? 1 : 0
-
-  node                 = hcloud_primary_ip.node["nbg1"].ip_address
-  client_configuration = talos_machine_secrets.this.client_configuration
-  kubernetes_version   = var.talos_kubernetes_version
-
-  depends_on = [talos_machine_bootstrap.controlplane]
+# Bootstrap/action resources previously occupied this state. Their provider
+# delete operations are no-ops unless reset=true, so remove their state records
+# without touching the live nodes. Bootstrap, apply-config and upgrades now live
+# in the guarded operator runbook rather than normal infrastructure convergence.
+removed {
+  from = talos_machine_configuration_apply.controlplane
+  lifecycle { destroy = false }
 }
 
-resource "talos_cluster_kubeconfig" "this" {
-  count = var.talos_manage ? 1 : 0
-
-  node                 = hcloud_primary_ip.node["nbg1"].ip_address
-  client_configuration = talos_machine_secrets.this.client_configuration
-
-  depends_on = [talos_cluster.this]
+removed {
+  from = talos_machine_configuration_apply.worker
+  lifecycle { destroy = false }
 }
+
+removed {
+  from = talos_machine_bootstrap.controlplane
+  lifecycle { destroy = false }
+}
+
+# Normal tofu plan/apply stops here. It owns durable cloud infrastructure,
+# cluster secrets and deterministic offline renders; it never calls a live Talos
+# or Kubernetes endpoint.
 
 # --- Talos outputs (sensitive: rendered configs + kubeconfig carry secrets) ---
 
 output "talos_controlplane_config" {
-  description = "Rendered control-plane machine config (sensitive)."
+  description = "Rendered control-plane machine config used by all three nodes (sensitive)."
   value       = data.talos_machine_configuration.controlplane.machine_configuration
   sensitive   = true
 }
 
-output "talos_worker_config" {
-  description = "Rendered worker machine config (sensitive)."
-  value       = data.talos_machine_configuration.worker.machine_configuration
-  sensitive   = true
-}
-output "talos_kubeconfig" {
-  description = "Raw kubeconfig for the Talos cluster (populated only when talos_manage = true)."
-  value       = var.talos_manage ? talos_cluster_kubeconfig.this[0].kubeconfig_raw : null
-  sensitive   = true
-}
-
 output "talosconfig" {
-  description = "Raw talosconfig (Talos client config for talosctl, sensitive)."
-  value       = talos_machine_secrets.this.client_configuration
+  description = "Raw Talos client config for lifecycle operations (sensitive)."
+  value       = data.talos_client_configuration.this.talos_config
   sensitive   = true
 }

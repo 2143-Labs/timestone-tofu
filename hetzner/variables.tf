@@ -35,16 +35,17 @@ variable "talos_schematic" {
   default     = "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 }
 
-variable "talos_worker_count" {
-  description = "Number of Talos worker nodes. The control plane is the nbg1 anchor; the remaining talos_locations become workers."
-  type        = number
-  default     = 2
+variable "talos_api_private_ip" {
+  description = "Stable private address assigned to the Hetzner Kubernetes API load balancer."
+  type        = string
+  default     = "10.26.0.20"
 }
 
 variable "talos_cluster_endpoint" {
-  description = "Kubernetes API endpoint URL. On the private network this is the control-plane node's private IP (https://10.26.0.10:6443). Placeholder for offline validate/plan; set the real address at apply."
+  description = "Deprecated compatibility input. The cluster endpoint is the private HA load balancer; leave null."
   type        = string
-  default     = "https://talos-api.invalid:6443"
+  default     = null
+  nullable    = true
 }
 
 variable "talos_private_subnet" {
@@ -59,8 +60,6 @@ variable "talos_bootstrap_access" {
   default     = false
 }
 
-variable "talos_manage" {
-  description = "When true, apply machine configs, bootstrap etcd, and fetch kubeconfig from live nodes (network + HCLOUD_TOKEN). Keep false for offline validate/plan."
-  type        = bool
-  default     = false
-}
+# Live Talos lifecycle actions are intentionally not OpenTofu resources. A
+# normal apply owns cloud infrastructure only; bootstrap and upgrades use the
+# guarded one-node-at-a-time operator runbook.

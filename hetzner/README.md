@@ -1,100 +1,122 @@
-# Hetzner leg — Talos Kubernetes backend + legacy k3s nodes
+# Hetzner leg — Talos Kubernetes backend
 
-Sovereign EU compute leg. This module now manages **two** things:
+Sovereign EU compute for Timestone. OpenTofu owns durable Hetzner resources and
+offline Talos configuration generation. Kubernetes content remains in the
+sibling `timestone-argo` GitOps repository.
 
-1. **Legacy k3s/NixOS nodes** (`ts-hz-ctl` CX23 + `ts-hz-db` CX33, nbg1) — the
-   original Phase-1 deployment, scheduled for retirement (step 7 of the Talos
-   migration). Declarations remain in `main.tf` until then.
-2. **Talos backend** (three CX33 nodes, one each in nbg1/fsn1/hel1) — the
-   replacement control plane + workers, declared in `talos.tf`.
+## Topology
 
-Run `tofu plan/apply` in THIS directory. HCLOUD_TOKEN is read from the
-environment; `TF_VAR_office_cidr` is required.
+- Three CX33 nodes, one each in nbg1/fsn1/hel1.
+- All three are schedulable Talos control-plane nodes and etcd voters.
+- Static private addresses: nbg1 `.10`, fsn1 `.11`, hel1 `.12`.
+- Private Hetzner LB `10.26.0.20:6443` is the stable in-cluster Kubernetes API
+  endpoint and health-checks all three API servers.
+- Public 6443/50000 remain closed except while the explicit
+  `talos_bootstrap_access` break-glass gate is enabled from the office `/32`.
+- Operator Kubernetes access remains Cloudflare Access at
+  `k8s.hero-rehab.xyz`; the private LB is never public.
 
-## Talos backend — what it creates
+Three etcd members require two votes, so the cluster tolerates one failed node
+or location. Two failed members stop control-plane progress by design. Running
+pods may continue during loss of quorum, but scheduling, reconciliation and CSI
+operations cannot.
 
-`talos.tf` provisions bare hcloud resources and renders Talos machine configs:
+## Ownership boundary
 
-- `hcloud_primary_ip` + `hcloud_server` — three CX33 nodes, `location` spread
-  across nbg1/fsn1/hel1. Ubuntu 24.04 is only a pre-ISO carrier; Talos installs
-  from the factory installer image.
-- `hcloud_firewall` `timestone-talos` — Talos API (50000), kube API (6443),
-  ICMP from the office + peers; Cilium WireGuard (51871/udp) between peers.
-- `talos_machine_secrets` — generated on first apply, or import an existing
-  talosctl `gen secrets` bundle (`tofu import talos_machine_secrets.this
-  ../.runtime/dummy/secrets.yaml`) to reuse across renders.
-- `data.talos_machine_configuration` (controlplane + worker) — rendered by the
-  siderolabs/talos provider using the same strategic-merge patch engine as
-  talosctl.
-- Gated live management (`var.talos_manage`): `talos_machine_configuration_apply`
-  (controlplane + workers), `talos_machine_bootstrap`, `talos_cluster`, and
-  `talos_cluster_kubeconfig` — all network calls to the live Talos API, planned
-  to 0 while `talos_manage = false`.
+A normal `tofu plan/apply` owns:
 
-## Node roles / topology
+- primary IPs, servers, firewall, private network/subnet;
+- private Kubernetes API load balancer, targets and health check;
+- clean version-pinned Talos Image Factory snapshot;
+- `talos_machine_secrets` and offline control-plane config rendering.
 
-- **nbg1** = control-plane (bootstrap/API anchor).
-- **fsn1 + hel1** = workers (`var.talos_worker_count`, default 2).
+It does **not** call a live Talos or Kubernetes API. `apply-config`, the one-time
+etcd bootstrap, kubeconfig retrieval, snapshots and upgrades are lifecycle
+actions with quorum/health gates; they are intentionally operator procedures.
+This avoids the old `talos_manage=false` defect, where a normal plan proposed
+destroying live action resources, and `talos_manage=true`, where a plan could
+attempt to bootstrap an existing cluster.
 
-No node taints; the control-plane `node-role.kubernetes.io/control-plane`
-taint/LB-label are deleted from the control-plane config only (see patches).
+State remains local and secret-bearing. Never print or commit state, rendered
+machine configs, talosconfig, kubeconfig or snapshots. Remote encrypted state is
+still required before multi-operator/CI apply is safe.
 
-## Machine config patches (`patches/`)
+## Normal infrastructure maintenance
 
-Patches are strategic-merge YAML applied via `config_patches`. They are split by
-scope because the configpatcher's `deleteForPath` does a strict map-key lookup:
+```sh
+cd hetzner
+export TF_VAR_office_cidr=<office-ip>/32
+../.tools/tofu init
+../.tools/tofu plan -out=../.runtime/hetzner.tfplan
+../.tools/tofu apply ../.runtime/hetzner.tfplan
+```
+
+Steady state is a no-op. Expected changes must never include server replacement,
+primary-IP destruction, Talos bootstrap, machine reset or public API exposure.
+
+## Talos configuration documents
 
 | Patch | Scope | Effect |
 |---|---|---|
-| `kubelet.yaml` | global | kubeReserved/systemReserved + `cloud-provider: external` |
-| `cilium-kubeproxy.yaml` | control-plane | disable kube-proxy (Cilium kube-proxy replacement) |
-| `cilium-cni.yaml` | control-plane | delete `KubeFlannelCNIConfig` document |
-| `controlplane-taint-labels.yaml` | control-plane | delete `exclude-from-external-load-balancers` label + control-plane taint |
-| (inline `yamlencode`) | global | `UnattendedInstallConfig` — install disk + factory installer image |
+| `private-network.yaml` | all nodes | `KubeNodeConfig.nodeIP` selects `10.26.0.0/24` |
+| `kubelet.yaml` | all nodes | kube/system reservations and external cloud provider |
+| `cilium-kubeproxy.yaml` | all nodes | disables kube-proxy for Cilium replacement |
+| `cilium-cni.yaml` | all nodes | removes built-in Flannel |
+| `api-san.yaml` | all nodes | Access listener/public API hostname SANs |
+| `controlplane-taint-labels.yaml` | all nodes | makes compact control planes schedulable |
 
-The install patch uses Talos 1.14's `UnattendedInstallConfig` document (the
-legacy `machine.install` block is now incompatible). The factory installer image
-carries the `siderolabs/qemu-guest-agent` extension (Hetzner QEMU/KVM graceful
-shutdown); re-resolve it at bootstrap — see `../talos/versions.json`.
+Talos 1.14 split node and component settings into focused documents. Do not
+restore deprecated `machine.kubelet.nodeIP` or `cluster.apiServer.certSANs`;
+combining old and new ownership causes the misleading “already set” merge error.
 
-The control-plane taint/LB-label deletion MUST stay control-plane-scoped: the
-worker KubeNodeConfig lacks those keys, and a global delete patch fails with
-"lookup failed" during merge.
+## Routine health and backups
 
-## Bootstrap / apply runbook
+Use `bin/maintain-talos.sh` with a protected `TALOSCONFIG` and a private/WARP
+path to the Talos API. The script refuses unknown nodes and checks Kubernetes,
+three-member etcd health and alarms before and after disruptive actions.
 
-1. **Preflight** — resolve datacenters/locations and generate secrets once:
-   ```sh
-   ../.tools/talosctl gen secrets -o ../.runtime/dummy/secrets.yaml
-   ```
-2. **Provision VMs** (needs `HCLOUD_TOKEN`):
-   ```sh
-   export HCLOUD_TOKEN=… TF_VAR_office_cidr=108.56.153.222/32
-   tofu init && tofu apply
-   ```
-3. **Import secrets into the provider** (reuse the generated bundle):
-   ```sh
-   tofu import talos_machine_secrets.this ../.runtime/dummy/secrets.yaml
-   ```
-4. **Render + inspect configs** (offline, no credentials):
-   ```sh
-   tofu plan   # shows talos_machine_secrets + deferred config renders
-   tofu apply  # writes rendered configs as sensitive outputs
-   ```
-5. **Bring up the cluster** (live, on the operator machine):
-   ```sh
-   tofu apply -var talos_manage=true
-   tofu output -raw talos_kubeconfig > ~/.kube/timestone
-   ```
+```sh
+TALOSCONFIG=~/.talos/timestone bin/maintain-talos.sh health
+TALOSCONFIG=~/.talos/timestone bin/maintain-talos.sh snapshot /secure/off-cluster/etcd-$(date +%F).snapshot
+```
 
-Until step 5 the three hcloud servers exist but are unconfigured Ubuntu hosts —
-no Talos API is reachable, so the gated `talos_manage` resources must stay off.
+Snapshots must leave the cluster and be retention-managed. Also verify CNPG
+backup/restore separately: three control planes do not make a single-instance,
+location-bound database volume highly available.
 
-## Key decisions (for the record)
+## Upgrade order
 
-- **OpenTofu 1.12.6**, **talos provider 0.12.0-beta.0** (SDK `v1.14.0-rc.2`,
-  matches Talos 1.14.0 GA). Pinned in `../talos/versions.json`.
-- **Helm 4.3.0** (not v3) — pinned in versions.json; charts are deployed via
-  ArgoCD (sibling `timestone-argo`), the local helm binary is for operator use.
-- **hcloud provider 1.68.0** removed the `datacenter` attribute (2026-07-01);
-  nodes use `location` and the API auto-assigns the datacenter.
+1. Verify all three etcd members, nodes, Cilium and Argo Applications are healthy.
+2. Export a fresh off-cluster etcd snapshot and verify the application database
+   backup.
+3. Upgrade Talos on **one node only**; wait for etcd, API, Cilium and node health
+   before the next. Upgrade a non-leader first where practical.
+4. Upgrade Kubernetes separately with `upgrade-k8s`; do not combine it with a
+   Talos or Cilium minor upgrade.
+5. Update the pinned versions/config only after the live operation succeeds, then
+   require a clean normal Tofu plan.
+
+Example Talos node operation:
+
+```sh
+TALOSCONFIG=~/.talos/timestone \
+  bin/maintain-talos.sh upgrade-node 10.26.0.11 \
+  factory.talos.dev/metal-installer/<schematic>:<version>
+```
+
+Never reset or upgrade two control-plane nodes concurrently. With one node down,
+there is no remaining failure margin.
+
+## Upkeep backlog
+
+- Move local OpenTofu state to encrypted remote storage with locking.
+- Provide an independent private/WARP Talos API route; an in-cluster Cloudflare
+  connector cannot repair a completely dead cluster. The office `/32` firewall
+  gate remains break-glass until that exists.
+- Automate encrypted off-cluster etcd snapshots and perform restore drills.
+- Increase critical stateless replicas and add PDB/topology spread. Cloudflared
+  and the Cilium operator are the first hardened components.
+- Make CNPG multi-instance with backups in another location before claiming
+  workload/data HA.
+- Monitor etcd alarms, DB size/fragmentation, fsync/peer RTT, certificate expiry,
+  node capacity, PVC location, tunnel health and pinned upstream releases.

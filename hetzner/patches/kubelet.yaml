@@ -1,0 +1,13 @@
+# Talos 1.14 kubelet settings. KubeletConfig owns component arguments and the
+# upstream KubeletConfiguration tree; nodeIP belongs in KubeNodeConfig instead.
+apiVersion: v1alpha1
+kind: KubeletConfig
+extraArgs:
+  cloud-provider: external
+config:
+  systemReserved:
+    cpu: 100m
+    memory: 256Mi
+  kubeReserved:
+    cpu: 150m
+    memory: 512Mi

@@ -1,56 +1,8 @@
-# Node-level machine config: the Hetzner private network NIC, and every kubelet
-# setting.
-#
-# ---------------------------------------------------------------------------
-# KNOWN BLOCKER — the golden image carries a baked machine config
-# ---------------------------------------------------------------------------
-# Applying this patch fails against servers built from the current
-# `imager_image.talos` snapshot:
-#   ".machine.kubelet.nodeIP is already set in v1alpha1 config"
-#   "kubelet config is already set in v1alpha1 config (.machine.kubelet)"
-# The error is identical whether machine.kubelet is written by one patch or two,
-# which proves it is not a patch-composition problem: the node ALREADY has
-# machine.kubelet set, because the snapshot image was taken from a
-# previously-provisioned node and carries that node's /system/state config.
-# Talos therefore refuses to overwrite those fields.
-#
-# Consequence: this file (and patches/api-san.yaml, for the same reason on
-# cluster.apiServer) cannot be applied until the image is rebuilt WITHOUT a
-# baked machine config, or the nodes are reset before configuring. Until then,
-# nodes come up on the image's stale config: nodeIP happens to be right
-# (10.26.0.0/24), but `extraArgs.cloud-provider: external` and the reservations
-# below are NOT applied — which is why nodes never get providerID, the hcloud
-# CCM never initializes them, and no pod-CIDR routes are programmed.
-# ---------------------------------------------------------------------------
-#
-# ONE patch owns `machine.kubelet`, deliberately: Talos's strategic merger
-# refuses a second writer of the same subtree. `nodeIP` exists only in the
-# machine tree (the KubeletConfig document rejects it as an unknown key), so the
-# kubelet settings could not live in a separate document patch.
-#
-# `extraConfig` is where the upstream KubeletConfiguration goes in tree form;
-# systemReserved/kubeReserved are KubeletConfiguration fields.
-machine:
-  network:
-    interfaces:
-      # eth0 (public) keeps Talos's default DHCP/mgmt behavior and stays
-      # egress-only. eth1 is the private network, so every node InternalIP and
-      # all cluster traffic stay off the public interface.
-      - interface: eth1
-        dhcp: true
-  kubelet:
-    nodeIP:
-      # MUST match var.talos_private_subnet and the subnet in network.tf.
-      validSubnets:
-        - 10.26.0.0/24
-    extraArgs:
-      # The hcloud CCM owns node lifecycle; kubelet must not try to. Without
-      # this the node is never marked uninitialized for the CCM to pick up.
-      cloud-provider: external
-    extraConfig:
-      systemReserved:
-        cpu: 100m
-        memory: 256Mi
-      kubeReserved:
-        cpu: 150m
-        memory: 512Mi
+# Talos 1.14 node identity: select the Hetzner private address for kubelet.
+# KubeNodeConfig owns nodeIP in the split-document format; do not also write the
+# deprecated machine.kubelet.nodeIP field or configuration merging will fail.
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+nodeIP:
+  validSubnets:
+    - 10.26.0.0/24
