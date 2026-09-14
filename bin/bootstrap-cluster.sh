@@ -175,17 +175,14 @@ data:
   application.resourceTrackingMethod: annotation+label
   resource.customizations.health.argoproj.io_Application: |
     hs = {}
-    hs.status = "Healthy"
-    hs.message = ""
-    if obj.status ~= nil then
-      if obj.status.health ~= nil then
-        local h = obj.status.health.status
-        if h == "Degraded" then
-          hs.status = "Degraded"
-          if obj.status.health.message ~= nil then
-            hs.message = obj.status.health.message
-          end
-        end
+    hs.status = "Progressing"
+    hs.message = "Waiting for child Application health status"
+    if obj.status ~= nil and obj.status.health ~= nil and obj.status.health.status ~= nil then
+      hs.status = obj.status.health.status
+      if obj.status.health.message ~= nil then
+        hs.message = obj.status.health.message
+      else
+        hs.message = ""
       end
     end
     return hs
@@ -223,6 +220,9 @@ ensure_secret default      cloudflared-tunnel-token --from-literal=token="$CLOUD
 ensure_secret default      temporal-db-password \
   --from-literal=username=temporal \
   --from-literal=password="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+# Required by the wave-5 UMVC3 Application; create once and never rotate.
+ensure_secret default      umvc3-app \
+  --from-literal=JWT_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')"
 # Consumed by the timestone DNS-01 ClusterIssuer created in the hardening phase.
 ensure_secret cert-manager cloudflare-api-token     --from-literal=token="$CLOUDFLARE_API_TOKEN"
 
