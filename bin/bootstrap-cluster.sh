@@ -223,6 +223,10 @@ ensure_secret default      temporal-db-password \
 # Required by the wave-5 UMVC3 Application; create once and never rotate.
 ensure_secret default      umvc3-app \
   --from-literal=JWT_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')"
+# Required by the wave-4 pocket-id Application; create once and never rotate
+# (PocketID encrypts its stored data with this key).
+ensure_secret default      pocket-id-secrets \
+  --from-literal=ENCRYPTION_KEY="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
 # Consumed by the timestone DNS-01 ClusterIssuer created in the hardening phase.
 ensure_secret cert-manager cloudflare-api-token     --from-literal=token="$CLOUDFLARE_API_TOKEN"
 
